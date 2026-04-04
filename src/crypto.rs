@@ -53,27 +53,32 @@ impl std::fmt::Debug for Scalar {
     }
 }
 
-/// A player's set of per-card-position encryption keys.
+/// A player's encryption key pair.
+/// Single key per player — used to encrypt all cards during shuffle.
+/// During dealing, players apply their decryption to specific cards
+/// and send the resulting point (not the scalar) to avoid leaking the key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerKeys {
-    /// One scalar per card position (52 for a standard deck).
-    pub encrypt: Vec<Scalar>,
-    /// Precomputed inverses for decryption.
-    pub decrypt: Vec<Scalar>,
+    pub encrypt: Scalar,
+    pub decrypt: Scalar,
 }
 
 impl PlayerKeys {
-    /// Generate fresh random keys for `n` card positions.
-    pub fn generate(n: usize) -> crate::Result<Self> {
+    /// Generate a fresh random key pair.
+    pub fn generate() -> crate::Result<Self> {
         init()?;
-        let mut encrypt = Vec::with_capacity(n);
-        let mut decrypt = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (e, d) = generate_keypair()?;
-            encrypt.push(e);
-            decrypt.push(d);
-        }
+        let (encrypt, decrypt) = generate_keypair()?;
         Ok(Self { encrypt, decrypt })
+    }
+
+    /// Encrypt all cards in a deck with this player's key.
+    pub fn encrypt_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
+        deck.iter().map(|p| encrypt(p, &self.encrypt)).collect()
+    }
+
+    /// Decrypt a single card point with this player's key.
+    pub fn decrypt_point(&self, point: &Point) -> crate::Result<Point> {
+        decrypt(point, &self.decrypt)
     }
 }
 

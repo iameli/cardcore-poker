@@ -1,4 +1,4 @@
-//! Integration test: drives a complete 2-player Hold'em hand through the protocol,
+//! Integration test: drives a complete Hold'em hand through the protocol,
 //! including a fuzz test that randomly picks valid actions.
 
 use cardcore_poker::crypto::{self, PlayerKeys, Point};
@@ -6,8 +6,8 @@ use cardcore_poker::game::BetAction;
 use cardcore_poker::protocol::{Action, Phase, ProtocolState, ValidActionKind};
 use rand::prelude::*;
 use rand::rngs::StdRng;
+use std::collections::HashMap;
 
-/// Simulates one player's view: they know their own keys but not others'.
 struct SimPlayer {
     id: usize,
     keys: PlayerKeys,
@@ -17,9 +17,8 @@ struct SimPlayer {
 impl SimPlayer {
     fn new(id: usize) -> Self {
         crypto::init().unwrap();
-        let keys = PlayerKeys::generate(52).unwrap();
-        let seed = format!("player_{}_seed_{}", id, rand::random::<u64>())
-            .into_bytes();
+        let keys = PlayerKeys::generate().unwrap();
+        let seed = format!("player_{}_seed_{}", id, rand::random::<u64>()).into_bytes();
         Self { id, keys, seed }
     }
 
@@ -27,31 +26,34 @@ impl SimPlayer {
         crypto::blake2b(&self.seed).unwrap()
     }
 
-    /// Encrypt all cards in the deck with this player's per-position keys, then shuffle.
     fn encrypt_and_shuffle(&self, deck: &[Point], rng: &mut impl Rng) -> Vec<Point> {
-        let mut encrypted: Vec<Point> = deck
-            .iter()
-            .enumerate()
-            .map(|(i, p)| crypto::encrypt(p, &self.keys.encrypt[i]).unwrap())
-            .collect();
+        let mut encrypted = self.keys.encrypt_deck(deck).unwrap();
         encrypted.shuffle(rng);
         encrypted
     }
 }
 
-/// Drive a complete 2-player hand through the protocol deterministically.
+/// Drive a complete 2-player hand through the protocol.
 #[test]
 fn full_hand_2_players() {
     let mut state = ProtocolState::new(2, 1000, 10);
     let players: Vec<SimPlayer> = (0..2).map(SimPlayer::new).collect();
     let mut rng = StdRng::seed_from_u64(42);
 
+    // Build card lookup
+    let card_map: HashMap<Point, cardcore_poker::card::Card> = crypto::card_points()
+        .unwrap()
+        .into_iter()
+        .map(|(c, p)| (p, c))
+        .collect();
+
     // Join
-    state.apply(&Action::Join { player_id: 0 }).unwrap();
-    state.apply(&Action::Join { player_id: 1 }).unwrap();
+    for p in &players {
+        state.apply(&Action::Join { player_id: p.id }).unwrap();
+    }
     assert!(matches!(state.phase, Phase::CommitSeeds));
 
-    // Commit seeds
+    // Commit + reveal seeds
     for p in &players {
         state
             .apply(&Action::CommitSeed {
@@ -60,9 +62,6 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    assert!(matches!(state.phase, Phase::RevealSeeds));
-
-    // Reveal seeds
     for p in &players {
         state
             .apply(&Action::RevealSeed {
@@ -71,9 +70,8 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    assert!(matches!(state.phase, Phase::Shuffle { .. }));
 
-    // Shuffle — each player encrypts and shuffles
+    // Shuffle
     for p in &players {
         let shuffled = p.encrypt_and_shuffle(&state.game.deck, &mut rng);
         state
@@ -83,89 +81,66 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    // After shuffle, blinds are posted and we're dealing hole cards
-    assert!(matches!(state.phase, Phase::DealHole { .. }));
-    assert_eq!(state.game.pot, 30); // SB=10 + BB=20
+    assert!(matches!(state.phase, Phase::Dealing { .. }));
+    assert_eq!(state.game.pot, 30);
 
-    // Deal hole cards — for each card, all other players provide decrypt shares
-    while matches!(state.phase, Phase::DealHole { .. }) {
-        let actions = state.valid_actions();
-        assert!(!actions.is_empty(), "no valid actions during deal");
-        for va in &actions {
-            if let ValidActionKind::DecryptCard { position } = &va.kind {
-                state
-                    .apply(&Action::DecryptCard {
-                        player_id: va.player_id,
-                        position: *position,
-                        scalar: players[va.player_id].keys.decrypt[*position].clone(),
-                    })
-                    .unwrap();
-            }
-        }
-    }
+    // Deal all hole cards
+    deal_until_done(&mut state, &players);
+
     assert!(matches!(state.phase, Phase::Betting));
-    // Each player should have 2 hole cards (partially decrypted — missing their own key)
     for p in &state.game.players {
         assert_eq!(p.hole_encrypted.len(), 2);
     }
 
-    // Preflop betting: just check/call through
-    play_betting_round(&mut state);
+    // Verify that decryption produces valid cards
+    for p in &players {
+        for enc in &state.game.players[p.id].hole_encrypted {
+            let decrypted = p.keys.decrypt_point(enc).unwrap();
+            assert!(card_map.contains_key(&decrypted), "hole card should resolve to a known card");
+        }
+    }
 
-    // Should be dealing flop now
-    assert!(
-        matches!(state.phase, Phase::DealCommunity { num_to_deal: 3 }),
-        "expected DealCommunity for flop, got {:?}",
-        state.phase
-    );
-    deal_community_cards(&mut state, &players);
+    // Play through remaining streets
+    play_betting_round(&mut state); // preflop
+    deal_until_done(&mut state, &players); // flop
     assert_eq!(state.game.community.len(), 3);
 
-    // Flop betting
-    play_betting_round(&mut state);
+    // Verify community cards resolve
+    for cp in &state.game.community {
+        assert!(card_map.contains_key(cp), "community card should resolve");
+    }
 
-    // Turn
-    assert!(matches!(state.phase, Phase::DealCommunity { num_to_deal: 1 }));
-    deal_community_cards(&mut state, &players);
+    play_betting_round(&mut state); // flop betting
+    deal_until_done(&mut state, &players); // turn
     assert_eq!(state.game.community.len(), 4);
 
-    // Turn betting
-    play_betting_round(&mut state);
-
-    // River
-    assert!(matches!(state.phase, Phase::DealCommunity { num_to_deal: 1 }));
-    deal_community_cards(&mut state, &players);
+    play_betting_round(&mut state); // turn betting
+    deal_until_done(&mut state, &players); // river
     assert_eq!(state.game.community.len(), 5);
 
-    // River betting
-    play_betting_round(&mut state);
+    play_betting_round(&mut state); // river betting
 
-    // Showdown
-    assert!(
-        matches!(state.phase, Phase::Showdown),
-        "expected Showdown, got {:?}",
-        state.phase
-    );
+    assert!(matches!(state.phase, Phase::Showdown));
 
-    // Each non-folded player reveals their hole card decryption keys
+    // Showdown: reveal keys
     for p in &players {
         if !state.game.players[p.id].folded {
-            let hole_positions: Vec<usize> = (0..2)
-                .map(|card_idx| state.deck_position_for_hole_public(p.id, card_idx))
-                .collect();
-            let scalars: Vec<_> = hole_positions
-                .iter()
-                .map(|pos| players[p.id].keys.decrypt[*pos].clone())
-                .collect();
             state
                 .apply(&Action::RevealHand {
                     player_id: p.id,
-                    scalars,
+                    scalar: p.keys.decrypt.clone(),
                 })
                 .unwrap();
         }
     }
     assert!(matches!(state.phase, Phase::Complete));
+
+    // Verify hole_points are real cards
+    for p in &players {
+        for pt in &state.game.players[p.id].hole_points {
+            assert!(card_map.contains_key(pt), "revealed card should resolve");
+        }
+    }
 }
 
 /// Fuzz test: randomly pick valid actions until the game completes.
@@ -193,27 +168,26 @@ fn fuzz_random_actions() {
             let action = make_action(va, &players, &state, &mut rng);
             state.apply(&action).unwrap_or_else(|e| {
                 panic!(
-                    "seed={}: action {:?} failed in phase {:?}: {}",
-                    seed,
-                    std::mem::discriminant(&action),
-                    state.phase,
-                    e
+                    "seed={}: action failed in phase {:?}: {}",
+                    seed, state.phase, e
                 );
             });
 
             steps += 1;
             if steps > max_steps {
                 panic!(
-                    "seed={}: exceeded {} steps, stuck in phase {:?}",
+                    "seed={}: exceeded {} steps in phase {:?}",
                     seed, max_steps, state.phase
                 );
             }
         }
-        eprintln!("seed={}: completed in {} steps ({} players)", seed, steps, num_players);
+        eprintln!(
+            "seed={}: completed in {} steps ({} players)",
+            seed, steps, num_players
+        );
     }
 }
 
-/// Generate a concrete Action from a ValidAction description.
 fn make_action(
     va: &cardcore_poker::protocol::ValidAction,
     players: &[SimPlayer],
@@ -233,18 +207,28 @@ fn make_action(
             seed: players[va.player_id].seed.clone(),
         },
         ValidActionKind::ShuffleDeck => {
-            let shuffled =
-                players[va.player_id].encrypt_and_shuffle(&state.game.deck, rng);
+            let shuffled = players[va.player_id].encrypt_and_shuffle(&state.game.deck, rng);
             Action::ShuffleDeck {
                 player_id: va.player_id,
                 deck: shuffled,
             }
         }
-        ValidActionKind::DecryptCard { position } => Action::DecryptCard {
-            player_id: va.player_id,
-            position: *position,
-            scalar: players[va.player_id].keys.decrypt[*position].clone(),
-        },
+        ValidActionKind::DecryptCard { deck_position } => {
+            // Decrypt the current point from the dealing phase
+            let current_point = match &state.phase {
+                Phase::Dealing { current_point, .. } => current_point.clone(),
+                _ => panic!("expected Dealing phase"),
+            };
+            let result = players[va.player_id]
+                .keys
+                .decrypt_point(&current_point)
+                .unwrap();
+            Action::DecryptCard {
+                player_id: va.player_id,
+                deck_position: *deck_position,
+                result,
+            }
+        }
         ValidActionKind::Bet { options } => {
             let action = options[rng.random_range(0..options.len())].clone();
             Action::Bet {
@@ -252,23 +236,41 @@ fn make_action(
                 action,
             }
         }
-        ValidActionKind::RevealHand => {
-            let hole_positions: Vec<usize> = (0..2)
-                .map(|card_idx| state.deck_position_for_hole_public(va.player_id, card_idx))
-                .collect();
-            let scalars: Vec<_> = hole_positions
-                .iter()
-                .map(|pos| players[va.player_id].keys.decrypt[*pos].clone())
-                .collect();
-            Action::RevealHand {
-                player_id: va.player_id,
-                scalars,
-            }
+        ValidActionKind::RevealHand => Action::RevealHand {
+            player_id: va.player_id,
+            scalar: players[va.player_id].keys.decrypt.clone(),
+        },
+    }
+}
+
+/// Process all dealing actions until the phase changes.
+fn deal_until_done(state: &mut ProtocolState, players: &[SimPlayer]) {
+    while matches!(state.phase, Phase::Dealing { .. }) {
+        let actions = state.valid_actions();
+        if actions.is_empty() {
+            break;
+        }
+        let va = &actions[0];
+        if let ValidActionKind::DecryptCard { deck_position } = &va.kind {
+            let current_point = match &state.phase {
+                Phase::Dealing { current_point, .. } => current_point.clone(),
+                _ => break,
+            };
+            let result = players[va.player_id]
+                .keys
+                .decrypt_point(&current_point)
+                .unwrap();
+            state
+                .apply(&Action::DecryptCard {
+                    player_id: va.player_id,
+                    deck_position: *deck_position,
+                    result,
+                })
+                .unwrap();
         }
     }
 }
 
-/// Play through a betting round by having everyone check/call.
 fn play_betting_round(state: &mut ProtocolState) {
     while matches!(state.phase, Phase::Betting) {
         let actions = state.valid_actions();
@@ -276,7 +278,6 @@ fn play_betting_round(state: &mut ProtocolState) {
             break;
         }
         if let ValidActionKind::Bet { options } = &actions[0].kind {
-            // Prefer check, then call
             let action = if options.iter().any(|a| matches!(a, BetAction::Check)) {
                 BetAction::Check
             } else {
@@ -288,27 +289,6 @@ fn play_betting_round(state: &mut ProtocolState) {
                     action,
                 })
                 .unwrap();
-        }
-    }
-}
-
-/// Deal community cards by having all players provide decryption shares.
-fn deal_community_cards(state: &mut ProtocolState, players: &[SimPlayer]) {
-    while matches!(state.phase, Phase::DealCommunity { .. }) {
-        let actions = state.valid_actions();
-        if actions.is_empty() {
-            break;
-        }
-        for va in &actions {
-            if let ValidActionKind::DecryptCard { position } = &va.kind {
-                state
-                    .apply(&Action::DecryptCard {
-                        player_id: va.player_id,
-                        position: *position,
-                        scalar: players[va.player_id].keys.decrypt[*position].clone(),
-                    })
-                    .unwrap();
-            }
         }
     }
 }

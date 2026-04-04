@@ -12,3 +12,7 @@ thiserror = "2"
 
 [dev-dependencies]
 rand = "0.9"
+
+[[bin]]
+name = "poker"
+path = "src/bin/poker.rs"

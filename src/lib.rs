@@ -1,6 +1,7 @@
 pub mod card;
 pub mod crypto;
 pub mod error;
+pub mod eval;
 pub mod game;
 pub mod protocol;
 
