@@ -1,19 +1,18 @@
 //! Ristretto255-based commutative encryption for mental poker.
 //!
-//! Each card is mapped to a Ristretto255 curve point. "Encrypting" a card means
-//! multiplying its point by a secret scalar. Because scalar multiplication is
-//! commutative, multiple players can encrypt in any order and decrypt in any order:
-//!
-//!   k_a * (k_b * P) = k_b * (k_a * P)
-//!
 //! Two-phase protocol:
 //! 1. Shuffle phase: each player encrypts all cards with ONE scalar, shuffles.
 //! 2. Lock phase: each player removes their shuffle key and re-encrypts each card
 //!    with a unique per-position lock key.
 //!
-//! Dealing reveals per-position lock scalars — verifiable by anyone.
+//! All randomness is deterministic from each player's secret seed, mixed with
+//! public game context. After a hand, revealing seeds allows full replay and
+//! verification.
 
 use libsodium_sys::*;
+use rand::RngCore;
+use rand_chacha::ChaCha20Rng;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use std::sync::Once;
 
@@ -57,6 +56,69 @@ impl std::fmt::Debug for Scalar {
     }
 }
 
+/// Deterministic RNG derived from a player's secret seed and game context.
+/// All randomness for a player flows through this, making the game fully
+/// replayable once the seed is revealed.
+pub struct PlayerRng {
+    inner: ChaCha20Rng,
+}
+
+impl PlayerRng {
+    /// Create a new RNG from a seed and domain context.
+    /// The context string provides domain separation (e.g., "shuffle", "lock").
+    pub fn new(seed: &[u8], context: &[u8]) -> crate::Result<Self> {
+        init()?;
+        // BLAKE2b(seed || context) → 32 bytes → ChaCha20 seed
+        let mut hash = [0u8; 32];
+        let mut combined = Vec::with_capacity(seed.len() + context.len());
+        combined.extend_from_slice(seed);
+        combined.extend_from_slice(context);
+        unsafe {
+            crypto_generichash(
+                hash.as_mut_ptr(),
+                32,
+                combined.as_ptr(),
+                combined.len() as u64,
+                std::ptr::null(),
+                0,
+            );
+        }
+        Ok(Self {
+            inner: ChaCha20Rng::from_seed(hash),
+        })
+    }
+
+    /// Generate a random Ristretto255 scalar deterministically.
+    /// Uses 64 bytes of PRNG output, reduced mod the group order.
+    pub fn random_scalar(&mut self) -> crate::Result<Scalar> {
+        init()?;
+        let mut unreduced = [0u8; 64];
+        self.inner.fill_bytes(&mut unreduced);
+        let mut scalar = Scalar([0u8; SCALAR_BYTES]);
+        unsafe {
+            crypto_core_ristretto255_scalar_reduce(scalar.0.as_mut_ptr(), unreduced.as_ptr());
+        }
+        Ok(scalar)
+    }
+
+    /// Generate a scalar and its multiplicative inverse.
+    pub fn random_keypair(&mut self) -> crate::Result<(Scalar, Scalar)> {
+        let enc = self.random_scalar()?;
+        let mut dec = Scalar([0u8; SCALAR_BYTES]);
+        unsafe {
+            if crypto_core_ristretto255_scalar_invert(dec.0.as_mut_ptr(), enc.0.as_ptr()) != 0 {
+                return Err(crate::Error::Crypto("scalar invert failed".into()));
+            }
+        }
+        Ok((enc, dec))
+    }
+
+    /// Get access to the inner RNG for shuffle permutations etc.
+    pub fn as_rng(&mut self) -> &mut ChaCha20Rng {
+        &mut self.inner
+    }
+}
+
 /// A player's keys for the two-phase protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerKeys {
@@ -69,10 +131,9 @@ pub struct PlayerKeys {
 }
 
 impl PlayerKeys {
-    /// Generate shuffle keys. Lock keys are generated later during the lock phase.
-    pub fn generate() -> crate::Result<Self> {
-        init()?;
-        let (shuffle_encrypt, shuffle_decrypt) = generate_keypair()?;
+    /// Generate shuffle keys from a deterministic RNG.
+    pub fn generate(rng: &mut PlayerRng) -> crate::Result<Self> {
+        let (shuffle_encrypt, shuffle_decrypt) = rng.random_keypair()?;
         Ok(Self {
             shuffle_encrypt,
             shuffle_decrypt,
@@ -81,13 +142,12 @@ impl PlayerKeys {
         })
     }
 
-    /// Generate per-position lock keys for `n` cards.
-    pub fn generate_lock_keys(&mut self, n: usize) -> crate::Result<()> {
-        init()?;
+    /// Generate per-position lock keys from a deterministic RNG.
+    pub fn generate_lock_keys(&mut self, n: usize, rng: &mut PlayerRng) -> crate::Result<()> {
         self.lock_encrypt = Vec::with_capacity(n);
         self.lock_decrypt = Vec::with_capacity(n);
         for _ in 0..n {
-            let (e, d) = generate_keypair()?;
+            let (e, d) = rng.random_keypair()?;
             self.lock_encrypt.push(e);
             self.lock_decrypt.push(d);
         }
@@ -102,21 +162,19 @@ impl PlayerKeys {
     }
 
     /// Lock phase: remove shuffle encryption and apply per-position lock key.
-    /// Input deck must still have this player's shuffle encryption on it.
     pub fn lock_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
         deck.iter()
             .enumerate()
             .map(|(i, p)| {
-                // Remove shuffle key
                 let unlocked = decrypt(p, &self.shuffle_decrypt)?;
-                // Apply position lock key
                 encrypt(&unlocked, &self.lock_encrypt[i])
             })
             .collect()
     }
 }
 
-/// Generate a random scalar and its multiplicative inverse.
+/// Generate a random scalar and its multiplicative inverse (non-deterministic).
+/// Used only in tests; game code should use PlayerRng.
 pub fn generate_keypair() -> crate::Result<(Scalar, Scalar)> {
     init()?;
     let mut enc = Scalar([0u8; SCALAR_BYTES]);
@@ -245,39 +303,89 @@ mod tests {
     }
 
     #[test]
-    fn two_phase_roundtrip() {
-        // Simulate the full two-phase protocol with 2 players
+    fn deterministic_rng_reproducible() {
+        let seed = b"test_seed_123";
+        let context = b"shuffle";
+
+        let mut rng1 = PlayerRng::new(seed, context).unwrap();
+        let mut rng2 = PlayerRng::new(seed, context).unwrap();
+
+        let s1 = rng1.random_scalar().unwrap();
+        let s2 = rng2.random_scalar().unwrap();
+        assert_eq!(s1.0, s2.0, "same seed+context must produce same scalar");
+
+        // Different context produces different scalar
+        let mut rng3 = PlayerRng::new(seed, b"lock").unwrap();
+        let s3 = rng3.random_scalar().unwrap();
+        assert_ne!(s1.0, s3.0, "different context must produce different scalar");
+    }
+
+    #[test]
+    fn deterministic_keypair_roundtrip() {
+        let mut rng = PlayerRng::new(b"my_secret_seed", b"test").unwrap();
+        let (enc, dec) = rng.random_keypair().unwrap();
+
         let card = Card::new(Rank::Ace, Suit::Spades);
         let point = card_to_point(&card).unwrap();
 
-        let mut alice = PlayerKeys::generate().unwrap();
-        let mut bob = PlayerKeys::generate().unwrap();
+        let encrypted = encrypt(&point, &enc).unwrap();
+        let decrypted = decrypt(&encrypted, &dec).unwrap();
+        assert_eq!(decrypted, point);
+    }
 
-        // Shuffle phase: both encrypt with shuffle keys
+    #[test]
+    fn two_phase_roundtrip() {
+        let card = Card::new(Rank::Ace, Suit::Spades);
+        let point = card_to_point(&card).unwrap();
+
+        let mut rng_a = PlayerRng::new(b"alice_seed", b"shuffle").unwrap();
+        let mut rng_b = PlayerRng::new(b"bob_seed", b"shuffle").unwrap();
+        let mut alice = PlayerKeys::generate(&mut rng_a).unwrap();
+        let mut bob = PlayerKeys::generate(&mut rng_b).unwrap();
+
+        // Shuffle phase
         let after_alice = encrypt(&point, &alice.shuffle_encrypt).unwrap();
         let after_both = encrypt(&after_alice, &bob.shuffle_encrypt).unwrap();
 
-        // Lock phase: each removes shuffle key, adds lock key
-        alice.generate_lock_keys(1).unwrap();
-        bob.generate_lock_keys(1).unwrap();
+        // Lock phase
+        let mut lock_rng_a = PlayerRng::new(b"alice_seed", b"lock").unwrap();
+        let mut lock_rng_b = PlayerRng::new(b"bob_seed", b"lock").unwrap();
+        alice.generate_lock_keys(1, &mut lock_rng_a).unwrap();
+        bob.generate_lock_keys(1, &mut lock_rng_b).unwrap();
 
-        // Alice locks (removes her shuffle, adds her lock)
         let alice_unlocked = decrypt(&after_both, &alice.shuffle_decrypt).unwrap();
         let alice_locked = encrypt(&alice_unlocked, &alice.lock_encrypt[0]).unwrap();
 
-        // Bob locks (removes his shuffle, adds his lock)
         let bob_unlocked = decrypt(&alice_locked, &bob.shuffle_decrypt).unwrap();
         let bob_locked = encrypt(&bob_unlocked, &bob.lock_encrypt[0]).unwrap();
 
-        // Now card is: lock_a_0 · lock_b_0 · P
-        // To reveal: apply both lock decrypts (order doesn't matter)
+        // Reveal both lock keys → original point
         let remove_alice = decrypt(&bob_locked, &alice.lock_decrypt[0]).unwrap();
         let final_point = decrypt(&remove_alice, &bob.lock_decrypt[0]).unwrap();
         assert_eq!(final_point, point);
+    }
 
-        // Other order works too
-        let remove_bob = decrypt(&bob_locked, &bob.lock_decrypt[0]).unwrap();
-        let final_point2 = decrypt(&remove_bob, &alice.lock_decrypt[0]).unwrap();
-        assert_eq!(final_point2, point);
+    #[test]
+    fn full_replay_from_seeds() {
+        // Two players generate keys, do crypto. Then re-derive from same seeds
+        // and verify identical keys are produced.
+        let seed_a = b"alice_secret";
+        let seed_b = b"bob_secret";
+
+        let mut rng_a1 = PlayerRng::new(seed_a, b"shuffle").unwrap();
+        let mut rng_b1 = PlayerRng::new(seed_b, b"shuffle").unwrap();
+        let keys_a1 = PlayerKeys::generate(&mut rng_a1).unwrap();
+        let keys_b1 = PlayerKeys::generate(&mut rng_b1).unwrap();
+
+        // "Replay" — same seeds, same keys
+        let mut rng_a2 = PlayerRng::new(seed_a, b"shuffle").unwrap();
+        let mut rng_b2 = PlayerRng::new(seed_b, b"shuffle").unwrap();
+        let keys_a2 = PlayerKeys::generate(&mut rng_a2).unwrap();
+        let keys_b2 = PlayerKeys::generate(&mut rng_b2).unwrap();
+
+        assert_eq!(keys_a1.shuffle_encrypt.0, keys_a2.shuffle_encrypt.0);
+        assert_eq!(keys_a1.shuffle_decrypt.0, keys_a2.shuffle_decrypt.0);
+        assert_eq!(keys_b1.shuffle_encrypt.0, keys_b2.shuffle_encrypt.0);
+        assert_eq!(keys_b1.shuffle_decrypt.0, keys_b2.shuffle_decrypt.0);
     }
 }

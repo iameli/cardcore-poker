@@ -1,34 +1,34 @@
 //! Text-based poker CLI.
 //!
-//! Simulates a local multiplayer Hold'em game where all players sit at the same
-//! terminal. The crypto protocol runs for real — each player has their own keys
-//! and can only see their own cards until showdown.
+//! Simulates a local multiplayer Hold'em game. The crypto protocol runs for real —
+//! all randomness is deterministic from each player's secret seed. After the hand,
+//! seeds are revealed and anyone could replay and verify every action.
 
 use cardcore_poker::card::Card;
-use cardcore_poker::crypto::{self, PlayerKeys, Point};
+use cardcore_poker::crypto::{self, PlayerKeys, PlayerRng, Point};
 use cardcore_poker::eval;
 use cardcore_poker::game::BetAction;
 use cardcore_poker::protocol::{Action, Phase, ProtocolState, ValidActionKind};
-use rand::prelude::*;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
 struct Player {
     id: usize,
     name: String,
-    keys: PlayerKeys,
     seed: Vec<u8>,
+    keys: PlayerKeys,
 }
 
 impl Player {
     fn new(id: usize, name: String) -> Self {
-        let keys = PlayerKeys::generate().unwrap();
         let seed = format!("seed_{}_{}", id, rand::random::<u64>()).into_bytes();
+        let mut rng = PlayerRng::new(&seed, b"shuffle").unwrap();
+        let keys = PlayerKeys::generate(&mut rng).unwrap();
         Self {
             id,
             name,
-            keys,
             seed,
+            keys,
         }
     }
 
@@ -36,17 +36,24 @@ impl Player {
         crypto::blake2b(&self.seed).unwrap()
     }
 
-    fn encrypt_and_shuffle(&self, deck: &[Point], rng: &mut impl Rng) -> Vec<Point> {
+    fn encrypt_and_shuffle(&self, deck: &[Point]) -> Vec<Point> {
         let mut encrypted = self.keys.encrypt_deck(deck).unwrap();
-        encrypted.shuffle(rng);
+        let mut rng = PlayerRng::new(&self.seed, b"shuffle_permutation").unwrap();
+        encrypted.shuffle(rng.as_rng());
         encrypted
     }
 
     fn lock_deck(&mut self, deck: &[Point]) -> Vec<Point> {
-        self.keys.generate_lock_keys(deck.len()).unwrap();
+        let deck_hash = crypto::blake2b(&serde_json::to_vec(deck).unwrap()).unwrap();
+        let mut context = b"lock:".to_vec();
+        context.extend_from_slice(&deck_hash);
+        let mut rng = PlayerRng::new(&self.seed, &context).unwrap();
+        self.keys.generate_lock_keys(deck.len(), &mut rng).unwrap();
         self.keys.lock_deck(deck).unwrap()
     }
 }
+
+use rand::prelude::SliceRandom;
 
 fn point_to_card(point: &Point, card_map: &HashMap<Point, Card>) -> Option<Card> {
     card_map.get(point).copied()
@@ -94,16 +101,11 @@ fn main() {
         player_names.push(name);
     }
 
-    let starting_chips: u64 = 1000;
-    let small_blind: u64 = 10;
-
     let mut players: Vec<Player> = player_names
         .iter()
         .enumerate()
         .map(|(i, name)| Player::new(i, name.clone()))
         .collect();
-
-    let mut rng = rand::rng();
 
     let card_map: HashMap<Point, Card> = crypto::card_points()
         .unwrap()
@@ -111,7 +113,7 @@ fn main() {
         .map(|(c, p)| (p, c))
         .collect();
 
-    let mut state = ProtocolState::new(num_players, starting_chips, small_blind);
+    let mut state = ProtocolState::new(num_players, 1000, 10);
 
     println!("\n--- Setting up hand ---\n");
 
@@ -121,7 +123,7 @@ fn main() {
     }
     println!("All {} players joined.", num_players);
 
-    // Commit seeds
+    // Commit seeds (no reveal during game)
     for p in &players {
         state
             .apply(&Action::CommitSeed {
@@ -130,22 +132,11 @@ fn main() {
             })
             .unwrap();
     }
-    println!("Seeds committed.");
+    println!("Seeds committed (kept secret until end of hand).");
 
-    // Reveal seeds
+    // Shuffle
     for p in &players {
-        state
-            .apply(&Action::RevealSeed {
-                player_id: p.id,
-                seed: p.seed.clone(),
-            })
-            .unwrap();
-    }
-    println!("Seeds revealed and combined.");
-
-    // Shuffle phase
-    for p in &players {
-        let shuffled = p.encrypt_and_shuffle(&state.game.deck, &mut rng);
+        let shuffled = p.encrypt_and_shuffle(&state.game.deck);
         state
             .apply(&Action::ShuffleDeck {
                 player_id: p.id,
@@ -155,7 +146,7 @@ fn main() {
         println!("{} shuffled the deck.", p.name);
     }
 
-    // Lock phase
+    // Lock
     for i in 0..players.len() {
         let locked = players[i].lock_deck(&state.game.deck);
         state
@@ -177,7 +168,7 @@ fn main() {
     println!("--- Dealing hole cards ---\n");
     deal_phase(&mut state, &players);
 
-    // Resolve each player's hole cards
+    // Resolve hole cards
     let mut player_hole_cards: Vec<Vec<Card>> = Vec::new();
     for p in &players {
         let mut cards = Vec::new();
@@ -186,14 +177,12 @@ fn main() {
             let decrypted = crypto::decrypt(encrypted_point, &p.keys.lock_decrypt[pos]).unwrap();
             if let Some(card) = point_to_card(&decrypted, &card_map) {
                 cards.push(card);
-            } else {
-                println!("WARNING: Could not resolve card for player {}", p.name);
             }
         }
         player_hole_cards.push(cards);
     }
 
-    // Show each player their cards (hot-seat style)
+    // Show cards (hot-seat)
     for p in &players {
         clear_screen();
         pause(&format!("Pass the terminal to {}.", p.name));
@@ -255,7 +244,6 @@ fn main() {
                 println!("\n--- Showdown ---\n");
                 let community_cards = resolve_community(&state, &card_map);
 
-                // All non-folded players reveal
                 for p in &players {
                     if state.game.players[p.id].folded {
                         continue;
@@ -310,7 +298,6 @@ fn main() {
                     let winners: Vec<_> = results.iter().filter(|(_, h)| h == best).collect();
                     let pot = state.game.pot;
                     let share = pot / winners.len() as u64;
-
                     println!();
                     if winners.len() == 1 {
                         println!(
@@ -353,6 +340,19 @@ fn main() {
         }
     }
 
+    // Post-game: verify seeds
+    println!("\n--- Seed Verification ---\n");
+    for p in &players {
+        state
+            .apply(&Action::VerifySeed {
+                player_id: p.id,
+                seed: p.seed.clone(),
+            })
+            .unwrap();
+        println!("{}'s seed verified.", p.name);
+    }
+    println!("All seeds verified. Game is fully replayable.");
+
     println!("\n--- Hand complete ---");
     println!("\nFinal chip counts:");
     for p in &players {
@@ -360,7 +360,6 @@ fn main() {
     }
 }
 
-/// Process all dealing actions until the phase changes.
 fn deal_phase(state: &mut ProtocolState, players: &[Player]) {
     while matches!(state.phase, Phase::Dealing { .. }) {
         let actions = state.valid_actions();

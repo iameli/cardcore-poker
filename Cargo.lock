@@ -50,6 +50,7 @@ version = "0.1.0"
 dependencies = [
  "libsodium-sys-stable",
  "rand",
+ "rand_chacha",
  "serde",
  "serde_json",
  "thiserror",

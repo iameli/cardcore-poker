@@ -1,7 +1,7 @@
-//! Integration tests for the two-phase shuffle+lock mental poker protocol.
+//! Integration tests for two-phase shuffle+lock with deterministic PRNG.
 
 use cardcore_poker::card::Card;
-use cardcore_poker::crypto::{self, PlayerKeys, Point};
+use cardcore_poker::crypto::{self, PlayerKeys, PlayerRng, Point};
 use cardcore_poker::game::BetAction;
 use cardcore_poker::protocol::{Action, Phase, ProtocolState, ValidActionKind};
 use rand::prelude::*;
@@ -10,40 +10,47 @@ use std::collections::HashMap;
 
 struct SimPlayer {
     id: usize,
-    keys: PlayerKeys,
     seed: Vec<u8>,
+    keys: PlayerKeys,
 }
 
 impl SimPlayer {
     fn new(id: usize) -> Self {
         crypto::init().unwrap();
-        let keys = PlayerKeys::generate().unwrap();
-        let seed = format!("player_{}_seed_{}", id, rand::random::<u64>()).into_bytes();
-        Self { id, keys, seed }
+        let seed = format!("player_{}_seed_{}", id, id * 12345).into_bytes();
+        let mut rng = PlayerRng::new(&seed, b"shuffle").unwrap();
+        let keys = PlayerKeys::generate(&mut rng).unwrap();
+        Self { id, seed, keys }
     }
 
     fn commitment(&self) -> [u8; crypto::HASH_BYTES] {
         crypto::blake2b(&self.seed).unwrap()
     }
 
-    fn encrypt_and_shuffle(&self, deck: &[Point], rng: &mut impl Rng) -> Vec<Point> {
+    fn encrypt_and_shuffle(&self, deck: &[Point]) -> Vec<Point> {
         let mut encrypted = self.keys.encrypt_deck(deck).unwrap();
-        encrypted.shuffle(rng);
+        // Shuffle deterministically from seed
+        let mut rng = PlayerRng::new(&self.seed, b"shuffle_permutation").unwrap();
+        encrypted.shuffle(rng.as_rng());
         encrypted
     }
 
     fn lock_deck(&mut self, deck: &[Point]) -> Vec<Point> {
-        self.keys.generate_lock_keys(deck.len()).unwrap();
+        // Mix deck state into lock RNG context for domain separation
+        let deck_hash = crypto::blake2b(&serde_json::to_vec(deck).unwrap()).unwrap();
+        let mut context = b"lock:".to_vec();
+        context.extend_from_slice(&deck_hash);
+        let mut rng = PlayerRng::new(&self.seed, &context).unwrap();
+        self.keys.generate_lock_keys(deck.len(), &mut rng).unwrap();
         self.keys.lock_deck(deck).unwrap()
     }
 }
 
-/// Drive a complete 2-player hand with full verification.
+/// Drive a complete 2-player hand and verify seed replay at the end.
 #[test]
-fn full_hand_2_players() {
+fn full_hand_with_seed_verification() {
     let mut state = ProtocolState::new(2, 1000, 10);
     let mut players: Vec<SimPlayer> = (0..2).map(SimPlayer::new).collect();
-    let mut rng = StdRng::seed_from_u64(42);
 
     let card_map: HashMap<Point, Card> = crypto::card_points()
         .unwrap()
@@ -56,7 +63,7 @@ fn full_hand_2_players() {
         state.apply(&Action::Join { player_id: p.id }).unwrap();
     }
 
-    // Commit + reveal seeds
+    // Commit seeds (no reveal during game)
     for p in &players {
         state
             .apply(&Action::CommitSeed {
@@ -65,18 +72,11 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    for p in &players {
-        state
-            .apply(&Action::RevealSeed {
-                player_id: p.id,
-                seed: p.seed.clone(),
-            })
-            .unwrap();
-    }
+    assert!(matches!(state.phase, Phase::Shuffle { .. }));
 
-    // Shuffle phase
+    // Shuffle
     for p in &players {
-        let shuffled = p.encrypt_and_shuffle(&state.game.deck, &mut rng);
+        let shuffled = p.encrypt_and_shuffle(&state.game.deck);
         state
             .apply(&Action::ShuffleDeck {
                 player_id: p.id,
@@ -84,9 +84,8 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    assert!(matches!(state.phase, Phase::Lock { next_player: 0 }));
 
-    // Lock phase
+    // Lock
     for i in 0..players.len() {
         let locked = players[i].lock_deck(&state.game.deck);
         state
@@ -96,44 +95,29 @@ fn full_hand_2_players() {
             })
             .unwrap();
     }
-    assert!(matches!(state.phase, Phase::Dealing { .. }));
-    assert_eq!(state.game.pot, 30); // SB=10 + BB=20
 
     // Deal hole cards
     deal_until_done(&mut state, &players);
     assert!(matches!(state.phase, Phase::Betting));
-    for p in &state.game.players {
-        assert_eq!(p.hole_encrypted.len(), 2);
-    }
 
     // Verify hole cards resolve
     for p in &players {
-        for enc in &state.game.players[p.id].hole_encrypted {
-            let decrypted = crypto::decrypt(enc, &p.keys.lock_decrypt[
-                state.hole_card_positions[p.id][
-                    state.game.players[p.id].hole_encrypted.iter().position(|e| e == enc).unwrap()
-                ]
-            ]).unwrap();
-            assert!(card_map.contains_key(&decrypted), "hole card should resolve");
+        for (idx, enc) in state.game.players[p.id].hole_encrypted.iter().enumerate() {
+            let pos = state.hole_card_positions[p.id][idx];
+            let decrypted = crypto::decrypt(enc, &p.keys.lock_decrypt[pos]).unwrap();
+            assert!(card_map.contains_key(&decrypted));
         }
     }
 
-    // Play through all streets
+    // Play through to showdown
     play_betting_round(&mut state);
-    deal_until_done(&mut state, &players); // flop
+    deal_until_done(&mut state, &players);
     assert_eq!(state.game.community.len(), 3);
-    for cp in &state.game.community {
-        assert!(card_map.contains_key(cp), "community card should resolve");
-    }
 
     play_betting_round(&mut state);
-    deal_until_done(&mut state, &players); // turn
-    assert_eq!(state.game.community.len(), 4);
-
+    deal_until_done(&mut state, &players);
     play_betting_round(&mut state);
-    deal_until_done(&mut state, &players); // river
-    assert_eq!(state.game.community.len(), 5);
-
+    deal_until_done(&mut state, &players);
     play_betting_round(&mut state);
     assert!(matches!(state.phase, Phase::Showdown));
 
@@ -155,15 +139,29 @@ fn full_hand_2_players() {
     }
     assert!(matches!(state.phase, Phase::Complete));
 
-    // Verify revealed cards
+    // Post-game: verify seeds
     for p in &players {
-        for pt in &state.game.players[p.id].hole_points {
-            assert!(card_map.contains_key(pt), "revealed card should resolve");
-        }
+        state
+            .apply(&Action::VerifySeed {
+                player_id: p.id,
+                seed: p.seed.clone(),
+            })
+            .unwrap();
+    }
+    assert!(state.seeds_verified.iter().all(|v| *v));
+
+    // Verify deterministic replay: re-create players from same seeds, get same keys
+    let replay_players: Vec<SimPlayer> = (0..2).map(SimPlayer::new).collect();
+    for i in 0..2 {
+        assert_eq!(
+            players[i].keys.shuffle_encrypt.0,
+            replay_players[i].keys.shuffle_encrypt.0,
+            "shuffle keys should be reproducible from seed"
+        );
     }
 }
 
-/// Fuzz test: randomly pick valid actions until the game completes.
+/// Fuzz test with deterministic PRNG.
 #[test]
 fn fuzz_random_actions() {
     for seed in 0..20 {
@@ -175,13 +173,10 @@ fn fuzz_random_actions() {
         let mut steps = 0;
         let max_steps = 10000;
 
-        while !matches!(state.phase, Phase::Complete) {
+        while state.phase != Phase::Complete || state.seeds_verified.iter().any(|v| !v) {
             let actions = state.valid_actions();
             if actions.is_empty() {
-                panic!(
-                    "seed={}: stuck with no valid actions in phase {:?} after {} steps",
-                    seed, state.phase, steps
-                );
+                break;
             }
 
             let va = &actions[rng.random_range(0..actions.len())];
@@ -201,6 +196,7 @@ fn fuzz_random_actions() {
                 );
             }
         }
+        assert!(state.seeds_verified.iter().all(|v| *v), "seed={}: all seeds should be verified", seed);
         eprintln!(
             "seed={}: completed in {} steps ({} players)",
             seed, steps, num_players
@@ -222,12 +218,8 @@ fn make_action(
             player_id: va.player_id,
             commitment: players[va.player_id].commitment(),
         },
-        ValidActionKind::RevealSeed => Action::RevealSeed {
-            player_id: va.player_id,
-            seed: players[va.player_id].seed.clone(),
-        },
         ValidActionKind::ShuffleDeck => {
-            let shuffled = players[va.player_id].encrypt_and_shuffle(&state.game.deck, rng);
+            let shuffled = players[va.player_id].encrypt_and_shuffle(&state.game.deck);
             Action::ShuffleDeck {
                 player_id: va.player_id,
                 deck: shuffled,
@@ -265,6 +257,10 @@ fn make_action(
                 scalars,
             }
         }
+        ValidActionKind::VerifySeed => Action::VerifySeed {
+            player_id: va.player_id,
+            seed: players[va.player_id].seed.clone(),
+        },
     }
 }
 

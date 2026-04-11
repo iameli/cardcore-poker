@@ -1,12 +1,11 @@
 //! Mental poker protocol state machine.
 //!
-//! Two-phase shuffle+lock protocol:
-//! 1. Shuffle: each player encrypts all cards with one key, shuffles.
-//! 2. Lock: each player removes their shuffle key, re-encrypts with per-position keys.
-//! 3. Deal: players reveal per-position lock scalars. Verifiable by anyone.
-//!
-//! `valid_actions()` returns what's currently expected — for fuzz testing,
-//! randomly pick valid actions.
+//! Two-phase shuffle+lock with deterministic PRNG:
+//! 1. Commit seeds (hash only — seeds stay secret)
+//! 2. Shuffle: each player encrypts all cards with one key, shuffles
+//! 3. Lock: each player removes shuffle key, re-encrypts with per-position keys
+//! 4. Deal/bet: players reveal per-position lock scalars
+//! 5. After the hand: reveal seeds for full game replay and verification
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,8 +16,8 @@ use crate::game::{BetAction, GameState, PlayerId, Street};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     WaitingForPlayers { need: usize },
+    /// Players commit hashes of their secret seeds.
     CommitSeeds,
-    RevealSeeds,
     /// Players take turns encrypting and shuffling the deck.
     Shuffle { next_player: PlayerId },
     /// Players take turns removing shuffle encryption and adding per-position lock keys.
@@ -51,16 +50,10 @@ pub enum Action {
         player_id: PlayerId,
         commitment: [u8; crypto::HASH_BYTES],
     },
-    RevealSeed {
-        player_id: PlayerId,
-        seed: Vec<u8>,
-    },
-    /// Shuffle phase: encrypt all cards with shuffle key and shuffle.
     ShuffleDeck {
         player_id: PlayerId,
         deck: Vec<Point>,
     },
-    /// Lock phase: remove shuffle encryption, apply per-position lock keys.
     LockDeck {
         player_id: PlayerId,
         deck: Vec<Point>,
@@ -78,8 +71,12 @@ pub enum Action {
     /// Reveal lock keys for hole card positions at showdown.
     RevealHand {
         player_id: PlayerId,
-        /// Lock scalars for this player's hole card positions.
         scalars: Vec<(usize, Scalar)>,
+    },
+    /// Post-game: reveal secret seed for full verification.
+    VerifySeed {
+        player_id: PlayerId,
+        seed: Vec<u8>,
     },
 }
 
@@ -88,12 +85,12 @@ impl Action {
         match self {
             Action::Join { player_id }
             | Action::CommitSeed { player_id, .. }
-            | Action::RevealSeed { player_id, .. }
             | Action::ShuffleDeck { player_id, .. }
             | Action::LockDeck { player_id, .. }
             | Action::RevealLockKey { player_id, .. }
             | Action::Bet { player_id, .. }
-            | Action::RevealHand { player_id, .. } => *player_id,
+            | Action::RevealHand { player_id, .. }
+            | Action::VerifySeed { player_id, .. } => *player_id,
         }
     }
 }
@@ -108,13 +105,12 @@ pub struct ValidAction {
 pub enum ValidActionKind {
     Join,
     CommitSeed,
-    RevealSeed,
     ShuffleDeck,
     LockDeck,
-    /// Reveal lock key for this deck position.
     RevealLockKey { deck_position: usize },
     Bet { options: Vec<BetAction> },
     RevealHand,
+    VerifySeed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,17 +118,16 @@ pub struct ProtocolState {
     pub phase: Phase,
     pub game: GameState,
     pub seed_commitments: Vec<Option<[u8; crypto::HASH_BYTES]>>,
-    pub seeds_revealed: Vec<Option<Vec<u8>>>,
-    pub combined_seed: Option<[u8; crypto::HASH_BYTES]>,
     pub shuffles_done: usize,
     pub locks_done: usize,
     pub showdown_revealed: Vec<bool>,
     pub next_deck_position: usize,
     hole_deal_queue: Vec<(PlayerId, usize)>,
-    /// Track which players have revealed their lock key for the current deal.
     pub deal_reveals: HashMap<PlayerId, Scalar>,
     /// For each player, the deck positions of their hole cards.
     pub hole_card_positions: Vec<Vec<usize>>,
+    /// Post-game seed verification tracking.
+    pub seeds_verified: Vec<bool>,
 }
 
 impl ProtocolState {
@@ -141,8 +136,6 @@ impl ProtocolState {
             phase: Phase::WaitingForPlayers { need: num_players },
             game: GameState::new(num_players, starting_chips, small_blind),
             seed_commitments: vec![None; num_players],
-            seeds_revealed: vec![None; num_players],
-            combined_seed: None,
             shuffles_done: 0,
             locks_done: 0,
             showdown_revealed: vec![false; num_players],
@@ -150,6 +143,7 @@ impl ProtocolState {
             hole_deal_queue: Vec::new(),
             deal_reveals: HashMap::new(),
             hole_card_positions: vec![Vec::new(); num_players],
+            seeds_verified: vec![false; num_players],
         }
     }
 
@@ -179,31 +173,7 @@ impl ProtocolState {
                 }
                 self.seed_commitments[*player_id] = Some(*commitment);
                 if self.seed_commitments.iter().all(|c| c.is_some()) {
-                    self.phase = Phase::RevealSeeds;
-                }
-                Ok(())
-            }
-
-            // --- Reveal Seeds ---
-            (Phase::RevealSeeds, Action::RevealSeed { player_id, seed }) => {
-                if self.seeds_revealed[*player_id].is_some() {
-                    return Err(crate::Error::InvalidAction("already revealed".into()));
-                }
-                let hash = crypto::blake2b(seed)?;
-                let commitment = self.seed_commitments[*player_id]
-                    .ok_or_else(|| crate::Error::InvalidAction("no commitment found".into()))?;
-                if hash != commitment {
-                    return Err(crate::Error::Crypto("seed doesn't match commitment".into()));
-                }
-                self.seeds_revealed[*player_id] = Some(seed.clone());
-
-                if self.seeds_revealed.iter().all(|s| s.is_some()) {
-                    let mut combined = Vec::new();
-                    for s in &self.seeds_revealed {
-                        combined.extend_from_slice(s.as_ref().unwrap());
-                    }
-                    self.combined_seed = Some(crypto::blake2b(&combined)?);
-
+                    // Seeds committed — go straight to shuffle (no reveal yet)
                     let card_points = crypto::card_points()?;
                     self.game.deck = card_points.into_iter().map(|(_, p)| p).collect();
                     self.phase = Phase::Shuffle { next_player: 0 };
@@ -223,7 +193,6 @@ impl ProtocolState {
                 self.shuffles_done += 1;
 
                 if self.shuffles_done >= self.game.num_players() {
-                    // All players shuffled — move to lock phase
                     self.phase = Phase::Lock { next_player: 0 };
                 } else {
                     self.phase = Phase::Shuffle {
@@ -245,7 +214,6 @@ impl ProtocolState {
                 self.locks_done += 1;
 
                 if self.locks_done >= self.game.num_players() {
-                    // All players locked — post blinds and start dealing
                     self.game.post_blinds();
                     self.start_dealing_hole_cards();
                 } else {
@@ -271,8 +239,6 @@ impl ProtocolState {
                 if *action_pos != *deck_position {
                     return Err(crate::Error::InvalidAction("wrong deck position".into()));
                 }
-
-                // Check this player should be revealing
                 let exclude = match deal_type {
                     DealType::HoleCard { for_player, .. } => Some(*for_player),
                     DealType::CommunityCard { .. } => None,
@@ -288,7 +254,6 @@ impl ProtocolState {
 
                 self.deal_reveals.insert(*player_id, scalar.clone());
 
-                // Check if we have all needed reveals
                 let reveals_needed = match deal_type {
                     DealType::HoleCard { .. } => self.game.num_players() - 1,
                     DealType::CommunityCard { .. } => self.game.num_players(),
@@ -330,9 +295,7 @@ impl ProtocolState {
                     return Err(crate::Error::InvalidAction("already revealed".into()));
                 }
 
-                // Apply this player's lock keys to their hole cards to fully decrypt
                 for (pos, scalar) in scalars {
-                    // Find which hole card index this position is
                     if let Some(idx) = self.hole_card_positions[*player_id]
                         .iter()
                         .position(|p| p == pos)
@@ -363,6 +326,24 @@ impl ProtocolState {
                 Ok(())
             }
 
+            // --- Verify Seed (post-game) ---
+            (Phase::Complete, Action::VerifySeed { player_id, seed }) => {
+                if self.seeds_verified[*player_id] {
+                    return Err(crate::Error::InvalidAction("already verified".into()));
+                }
+                // Check seed matches commitment
+                let hash = crypto::blake2b(seed)?;
+                let commitment = self.seed_commitments[*player_id]
+                    .ok_or_else(|| crate::Error::InvalidAction("no commitment found".into()))?;
+                if hash != commitment {
+                    return Err(crate::Error::Crypto("seed doesn't match commitment".into()));
+                }
+                self.seeds_verified[*player_id] = true;
+                // Actual replay verification happens client-side — they can re-derive
+                // all keys from this seed and verify every action.
+                Ok(())
+            }
+
             _ => Err(crate::Error::InvalidAction(format!(
                 "action {:?} not valid in phase {:?}",
                 std::mem::discriminant(action),
@@ -388,16 +369,6 @@ impl ProtocolState {
                 .map(|(pid, _)| ValidAction {
                     player_id: pid,
                     kind: ValidActionKind::CommitSeed,
-                })
-                .collect(),
-            Phase::RevealSeeds => self
-                .seeds_revealed
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.is_none())
-                .map(|(pid, _)| ValidAction {
-                    player_id: pid,
-                    kind: ValidActionKind::RevealSeed,
                 })
                 .collect(),
             Phase::Shuffle { next_player } => vec![ValidAction {
@@ -449,7 +420,18 @@ impl ProtocolState {
                     kind: ValidActionKind::RevealHand,
                 })
                 .collect(),
-            Phase::Complete => vec![],
+            Phase::Complete => {
+                // Post-game: any player who hasn't verified yet can reveal their seed
+                self.seeds_verified
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| !**v)
+                    .map(|(pid, _)| ValidAction {
+                        player_id: pid,
+                        kind: ValidActionKind::VerifySeed,
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -509,9 +491,7 @@ impl ProtocolState {
         }
     }
 
-    /// Called when all required lock keys have been revealed for a card.
     fn finish_dealing_card(&mut self, deal_type: &DealType, deck_position: usize) {
-        // Apply all revealed lock scalars to the deck point to get partially-decrypted point
         let mut point = self.game.deck[deck_position].clone();
         for scalar in self.deal_reveals.values() {
             point = crypto::decrypt(&point, scalar).unwrap();
@@ -519,7 +499,6 @@ impl ProtocolState {
 
         match deal_type {
             DealType::HoleCard { for_player, .. } => {
-                // Point still has the recipient's lock key on it — they decrypt locally
                 self.game.players[*for_player]
                     .hole_encrypted
                     .push(point);
@@ -536,7 +515,6 @@ impl ProtocolState {
             DealType::CommunityCard {
                 remaining_this_street,
             } => {
-                // All players revealed — point is fully decrypted
                 self.game.community.push(point);
                 self.next_deck_position += 1;
                 self.deal_reveals.clear();
@@ -622,15 +600,13 @@ mod tests {
     }
 
     #[test]
-    fn seed_commit_reveal_flow() {
+    fn commit_goes_to_shuffle() {
         let mut state = ProtocolState::new(2, 1000, 10);
         state.apply(&Action::Join { player_id: 0 }).unwrap();
         state.apply(&Action::Join { player_id: 1 }).unwrap();
 
-        let seed0 = b"player0_secret_seed".to_vec();
-        let seed1 = b"player1_secret_seed".to_vec();
-        let hash0 = crypto::blake2b(&seed0).unwrap();
-        let hash1 = crypto::blake2b(&seed1).unwrap();
+        let hash0 = crypto::blake2b(b"seed0").unwrap();
+        let hash1 = crypto::blake2b(b"seed1").unwrap();
 
         state
             .apply(&Action::CommitSeed {
@@ -644,50 +620,32 @@ mod tests {
                 commitment: hash1,
             })
             .unwrap();
-        assert!(matches!(state.phase, Phase::RevealSeeds));
-
-        state
-            .apply(&Action::RevealSeed {
-                player_id: 0,
-                seed: seed0,
-            })
-            .unwrap();
-        state
-            .apply(&Action::RevealSeed {
-                player_id: 1,
-                seed: seed1,
-            })
-            .unwrap();
+        // Should go directly to Shuffle, not RevealSeeds
         assert!(matches!(state.phase, Phase::Shuffle { next_player: 0 }));
-        assert!(state.combined_seed.is_some());
         assert_eq!(state.game.deck.len(), 52);
     }
 
     #[test]
-    fn bad_seed_reveal_rejected() {
+    fn verify_seed_after_complete() {
         let mut state = ProtocolState::new(2, 1000, 10);
-        state.apply(&Action::Join { player_id: 0 }).unwrap();
-        state.apply(&Action::Join { player_id: 1 }).unwrap();
+        state.phase = Phase::Complete;
+        let seed = b"my_seed".to_vec();
+        let hash = crypto::blake2b(&seed).unwrap();
+        state.seed_commitments[0] = Some(hash);
 
-        let seed0 = b"real_seed".to_vec();
-        let hash0 = crypto::blake2b(&seed0).unwrap();
         state
-            .apply(&Action::CommitSeed {
+            .apply(&Action::VerifySeed {
                 player_id: 0,
-                commitment: hash0,
+                seed: seed.clone(),
             })
             .unwrap();
-        let hash1 = crypto::blake2b(b"seed1").unwrap();
-        state
-            .apply(&Action::CommitSeed {
-                player_id: 1,
-                commitment: hash1,
-            })
-            .unwrap();
+        assert!(state.seeds_verified[0]);
 
-        let result = state.apply(&Action::RevealSeed {
-            player_id: 0,
-            seed: b"fake_seed".to_vec(),
+        // Bad seed rejected
+        state.seed_commitments[1] = Some(crypto::blake2b(b"real").unwrap());
+        let result = state.apply(&Action::VerifySeed {
+            player_id: 1,
+            seed: b"fake".to_vec(),
         });
         assert!(result.is_err());
     }
