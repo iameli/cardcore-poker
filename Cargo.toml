@@ -22,6 +22,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 rand = "0.9"
+wasm-bindgen-test = "0.3"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
