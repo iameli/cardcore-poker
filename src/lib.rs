@@ -2,6 +2,8 @@ extern crate alloc;
 
 pub mod agent;
 pub mod card;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 pub mod crypto;
 pub mod error;
 pub mod eval;

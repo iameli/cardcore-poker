@@ -4,20 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-libsodium-sys-stable = "1"
+curve25519-dalek = { version = "4", features = ["serde", "digest"] }
+blake2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.9"
 rand_chacha = "0.9"
+rand_core = "0.9"
 base64 = "0.22"
 thiserror = "2"
 jacquard-common = "0.11"
 jacquard-derive = "0.11"
 jacquard-lexicon = "0.11"
 dasl = "0.2.0"
+wasm-bindgen = "0.2"
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 rand = "0.9"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "poker"

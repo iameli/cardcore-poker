@@ -1,7 +1,5 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("sodium init failed")]
-    SodiumInit,
     #[error("invalid card index: {0}")]
     InvalidCard(u8),
     #[error("crypto error: {0}")]

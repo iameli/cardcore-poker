@@ -1,39 +1,31 @@
 //! Ristretto255-based commutative encryption for mental poker.
 //!
+//! Pure Rust implementation using curve25519-dalek — compiles to WASM.
+//!
 //! Two-phase protocol:
 //! 1. Shuffle phase: each player encrypts all cards with ONE scalar, shuffles.
 //! 2. Lock phase: each player removes their shuffle key and re-encrypts each card
 //!    with a unique per-position lock key.
 //!
 //! All randomness is deterministic from each player's secret seed, mixed with
-//! public game context. After a hand, revealing seeds allows full replay and
-//! verification.
+//! public game context.
 
-use libsodium_sys::*;
+use blake2::digest::consts::U32;
+use blake2::{Blake2b, Digest};
+use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+use curve25519_dalek::scalar::Scalar as DalekScalar;
 use rand::RngCore;
-use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
-use std::sync::Once;
 
 use crate::card::Card;
 
-static SODIUM_INIT: Once = Once::new();
+type Blake2b256 = Blake2b<U32>;
 
-/// Initialize libsodium. Safe to call multiple times.
-pub fn init() -> crate::Result<()> {
-    let mut result = Ok(());
-    SODIUM_INIT.call_once(|| unsafe {
-        if sodium_init() < 0 {
-            result = Err(crate::Error::SodiumInit);
-        }
-    });
-    result
-}
-
-pub const SCALAR_BYTES: usize = crypto_core_ristretto255_SCALARBYTES as usize;
-pub const POINT_BYTES: usize = crypto_core_ristretto255_BYTES as usize;
-pub const HASH_BYTES: usize = crypto_generichash_BYTES as usize;
+pub const SCALAR_BYTES: usize = 32;
+pub const POINT_BYTES: usize = 32;
+pub const HASH_BYTES: usize = 32;
 
 /// A secret scalar used to encrypt/decrypt cards.
 #[derive(Clone)]
@@ -95,61 +87,65 @@ impl std::fmt::Debug for Scalar {
     }
 }
 
+// --- Internal conversions ---
+
+fn to_dalek_scalar(s: &Scalar) -> DalekScalar {
+    let opt = DalekScalar::from_canonical_bytes(s.0);
+    if bool::from(opt.is_some()) {
+        opt.unwrap()
+    } else {
+        // Reduce mod group order if not canonical
+        let mut wide = [0u8; 64];
+        wide[..32].copy_from_slice(&s.0);
+        DalekScalar::from_bytes_mod_order_wide(&wide)
+    }
+}
+
+fn from_dalek_scalar(s: &DalekScalar) -> Scalar {
+    Scalar(s.to_bytes())
+}
+
+fn to_dalek_point(p: &Point) -> Option<RistrettoPoint> {
+    CompressedRistretto(p.0).decompress()
+}
+
+fn from_dalek_point(p: &RistrettoPoint) -> Point {
+    Point(p.compress().to_bytes())
+}
+
+// --- PlayerRng ---
+
 /// Deterministic RNG derived from a player's secret seed and game context.
-/// All randomness for a player flows through this, making the game fully
-/// replayable once the seed is revealed.
 pub struct PlayerRng {
     inner: ChaCha20Rng,
 }
 
 impl PlayerRng {
     /// Create a new RNG from a seed and domain context.
-    /// The context string provides domain separation (e.g., "shuffle", "lock").
     pub fn new(seed: &[u8], context: &[u8]) -> crate::Result<Self> {
-        init()?;
-        // BLAKE2b(seed || context) → 32 bytes → ChaCha20 seed
-        let mut hash = [0u8; 32];
-        let mut combined = Vec::with_capacity(seed.len() + context.len());
-        combined.extend_from_slice(seed);
-        combined.extend_from_slice(context);
-        unsafe {
-            crypto_generichash(
-                hash.as_mut_ptr(),
-                32,
-                combined.as_ptr(),
-                combined.len() as u64,
-                std::ptr::null(),
-                0,
-            );
-        }
+        let mut hasher = Blake2b256::new();
+        hasher.update(seed);
+        hasher.update(context);
+        let hash: [u8; 32] = hasher.finalize().into();
         Ok(Self {
             inner: ChaCha20Rng::from_seed(hash),
         })
     }
 
     /// Generate a random Ristretto255 scalar deterministically.
-    /// Uses 64 bytes of PRNG output, reduced mod the group order.
     pub fn random_scalar(&mut self) -> crate::Result<Scalar> {
-        init()?;
-        let mut unreduced = [0u8; 64];
-        self.inner.fill_bytes(&mut unreduced);
-        let mut scalar = Scalar([0u8; SCALAR_BYTES]);
-        unsafe {
-            crypto_core_ristretto255_scalar_reduce(scalar.0.as_mut_ptr(), unreduced.as_ptr());
-        }
-        Ok(scalar)
+        let mut wide = [0u8; 64];
+        self.inner.fill_bytes(&mut wide);
+        let dalek = DalekScalar::from_bytes_mod_order_wide(&wide);
+        Ok(from_dalek_scalar(&dalek))
     }
 
     /// Generate a scalar and its multiplicative inverse.
     pub fn random_keypair(&mut self) -> crate::Result<(Scalar, Scalar)> {
         let enc = self.random_scalar()?;
-        let mut dec = Scalar([0u8; SCALAR_BYTES]);
-        unsafe {
-            if crypto_core_ristretto255_scalar_invert(dec.0.as_mut_ptr(), enc.0.as_ptr()) != 0 {
-                return Err(crate::Error::Crypto("scalar invert failed".into()));
-            }
-        }
-        Ok((enc, dec))
+        let dalek_enc = to_dalek_scalar(&enc);
+        let dalek_dec = dalek_enc.invert();
+        Ok((enc, from_dalek_scalar(&dalek_dec)))
     }
 
     /// Get access to the inner RNG for shuffle permutations etc.
@@ -158,19 +154,18 @@ impl PlayerRng {
     }
 }
 
+// --- PlayerKeys ---
+
 /// A player's keys for the two-phase protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerKeys {
-    /// Single key used to encrypt all cards during shuffle.
     pub shuffle_encrypt: Scalar,
     pub shuffle_decrypt: Scalar,
-    /// Per-position lock keys (generated during lock phase, one per card).
     pub lock_encrypt: Vec<Scalar>,
     pub lock_decrypt: Vec<Scalar>,
 }
 
 impl PlayerKeys {
-    /// Generate shuffle keys from a deterministic RNG.
     pub fn generate(rng: &mut PlayerRng) -> crate::Result<Self> {
         let (shuffle_encrypt, shuffle_decrypt) = rng.random_keypair()?;
         Ok(Self {
@@ -181,7 +176,6 @@ impl PlayerKeys {
         })
     }
 
-    /// Generate per-position lock keys from a deterministic RNG.
     pub fn generate_lock_keys(&mut self, n: usize, rng: &mut PlayerRng) -> crate::Result<()> {
         self.lock_encrypt = Vec::with_capacity(n);
         self.lock_decrypt = Vec::with_capacity(n);
@@ -193,14 +187,12 @@ impl PlayerKeys {
         Ok(())
     }
 
-    /// Shuffle phase: encrypt all cards with the single shuffle key.
     pub fn encrypt_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
         deck.iter()
             .map(|p| encrypt(p, &self.shuffle_encrypt))
             .collect()
     }
 
-    /// Lock phase: remove shuffle encryption and apply per-position lock key.
     pub fn lock_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
         deck.iter()
             .enumerate()
@@ -212,41 +204,23 @@ impl PlayerKeys {
     }
 }
 
+// --- Core operations ---
+
 /// Generate a random scalar and its multiplicative inverse (non-deterministic).
-/// Used only in tests; game code should use PlayerRng.
 pub fn generate_keypair() -> crate::Result<(Scalar, Scalar)> {
-    init()?;
-    let mut enc = Scalar([0u8; SCALAR_BYTES]);
-    let mut dec = Scalar([0u8; SCALAR_BYTES]);
-    unsafe {
-        crypto_core_ristretto255_scalar_random(enc.0.as_mut_ptr());
-        if crypto_core_ristretto255_scalar_invert(dec.0.as_mut_ptr(), enc.0.as_ptr()) != 0 {
-            return Err(crate::Error::Crypto("scalar invert failed".into()));
-        }
-    }
-    Ok((enc, dec))
+    let mut rng = rand::rng();
+    let mut wide = [0u8; 64];
+    rng.fill_bytes(&mut wide);
+    let dalek_enc = DalekScalar::from_bytes_mod_order_wide(&wide);
+    let dalek_dec = dalek_enc.invert();
+    Ok((from_dalek_scalar(&dalek_enc), from_dalek_scalar(&dalek_dec)))
 }
 
 /// Map a card to a unique Ristretto255 point via hash-to-group.
 pub fn card_to_point(card: &Card) -> crate::Result<Point> {
-    init()?;
     let label = format!("cardcore-poker:card:{}", card);
-    let mut hash = [0u8; 64];
-    unsafe {
-        crypto_generichash(
-            hash.as_mut_ptr(),
-            64,
-            label.as_ptr(),
-            label.len() as u64,
-            std::ptr::null(),
-            0,
-        );
-    }
-    let mut point = Point([0u8; POINT_BYTES]);
-    unsafe {
-        crypto_core_ristretto255_from_hash(point.0.as_mut_ptr(), hash.as_ptr());
-    }
-    Ok(point)
+    let point = RistrettoPoint::hash_from_bytes::<blake2::Blake2b512>(label.as_bytes());
+    Ok(from_dalek_point(&point))
 }
 
 /// Build the mapping of all 52 cards to their Ristretto255 points.
@@ -262,16 +236,10 @@ pub fn card_points() -> crate::Result<Vec<(Card, Point)>> {
 
 /// Encrypt (lock) a point by multiplying by a scalar.
 pub fn encrypt(point: &Point, scalar: &Scalar) -> crate::Result<Point> {
-    init()?;
-    let mut out = Point([0u8; POINT_BYTES]);
-    unsafe {
-        if crypto_scalarmult_ristretto255(out.0.as_mut_ptr(), scalar.0.as_ptr(), point.0.as_ptr())
-            != 0
-        {
-            return Err(crate::Error::Crypto("scalarmult failed".into()));
-        }
-    }
-    Ok(out)
+    let p = to_dalek_point(point)
+        .ok_or_else(|| crate::Error::Crypto("invalid point".into()))?;
+    let s = to_dalek_scalar(scalar);
+    Ok(from_dalek_point(&(s * p)))
 }
 
 /// Decrypt (unlock) a point by multiplying by the scalar's inverse.
@@ -279,21 +247,16 @@ pub fn decrypt(point: &Point, inverse_scalar: &Scalar) -> crate::Result<Point> {
     encrypt(point, inverse_scalar)
 }
 
-/// Hash arbitrary data with BLAKE2b.
+/// Hash arbitrary data with BLAKE2b-256.
 pub fn blake2b(data: &[u8]) -> crate::Result<[u8; HASH_BYTES]> {
-    init()?;
-    let mut out = [0u8; HASH_BYTES];
-    unsafe {
-        crypto_generichash(
-            out.as_mut_ptr(),
-            HASH_BYTES,
-            data.as_ptr(),
-            data.len() as u64,
-            std::ptr::null(),
-            0,
-        );
-    }
-    Ok(out)
+    let mut hasher = Blake2b256::new();
+    hasher.update(data);
+    Ok(hasher.finalize().into())
+}
+
+/// No-op init (libsodium is gone, pure Rust now).
+pub fn init() -> crate::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -351,12 +314,11 @@ mod tests {
 
         let s1 = rng1.random_scalar().unwrap();
         let s2 = rng2.random_scalar().unwrap();
-        assert_eq!(s1.0, s2.0, "same seed+context must produce same scalar");
+        assert_eq!(s1.0, s2.0);
 
-        // Different context produces different scalar
         let mut rng3 = PlayerRng::new(seed, b"lock").unwrap();
         let s3 = rng3.random_scalar().unwrap();
-        assert_ne!(s1.0, s3.0, "different context must produce different scalar");
+        assert_ne!(s1.0, s3.0);
     }
 
     #[test]
@@ -382,11 +344,9 @@ mod tests {
         let mut alice = PlayerKeys::generate(&mut rng_a).unwrap();
         let mut bob = PlayerKeys::generate(&mut rng_b).unwrap();
 
-        // Shuffle phase
         let after_alice = encrypt(&point, &alice.shuffle_encrypt).unwrap();
         let after_both = encrypt(&after_alice, &bob.shuffle_encrypt).unwrap();
 
-        // Lock phase
         let mut lock_rng_a = PlayerRng::new(b"alice_seed", b"lock").unwrap();
         let mut lock_rng_b = PlayerRng::new(b"bob_seed", b"lock").unwrap();
         alice.generate_lock_keys(1, &mut lock_rng_a).unwrap();
@@ -398,7 +358,6 @@ mod tests {
         let bob_unlocked = decrypt(&alice_locked, &bob.shuffle_decrypt).unwrap();
         let bob_locked = encrypt(&bob_unlocked, &bob.lock_encrypt[0]).unwrap();
 
-        // Reveal both lock keys → original point
         let remove_alice = decrypt(&bob_locked, &alice.lock_decrypt[0]).unwrap();
         let final_point = decrypt(&remove_alice, &bob.lock_decrypt[0]).unwrap();
         assert_eq!(final_point, point);
@@ -406,8 +365,6 @@ mod tests {
 
     #[test]
     fn full_replay_from_seeds() {
-        // Two players generate keys, do crypto. Then re-derive from same seeds
-        // and verify identical keys are produced.
         let seed_a = b"alice_secret";
         let seed_b = b"bob_secret";
 
@@ -416,7 +373,6 @@ mod tests {
         let keys_a1 = PlayerKeys::generate(&mut rng_a1).unwrap();
         let keys_b1 = PlayerKeys::generate(&mut rng_b1).unwrap();
 
-        // "Replay" — same seeds, same keys
         let mut rng_a2 = PlayerRng::new(seed_a, b"shuffle").unwrap();
         let mut rng_b2 = PlayerRng::new(seed_b, b"shuffle").unwrap();
         let keys_a2 = PlayerKeys::generate(&mut rng_a2).unwrap();
