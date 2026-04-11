@@ -48,6 +48,7 @@ pub enum Action {
     Join { player_id: PlayerId },
     CommitSeed {
         player_id: PlayerId,
+        #[serde(with = "crypto::serde_base64")]
         commitment: [u8; crypto::HASH_BYTES],
     },
     ShuffleDeck {
@@ -76,6 +77,7 @@ pub enum Action {
     /// Post-game: reveal secret seed for full verification.
     VerifySeed {
         player_id: PlayerId,
+        #[serde(with = "crypto::serde_base64_vec")]
         seed: Vec<u8>,
     },
 }

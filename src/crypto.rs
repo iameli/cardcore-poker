@@ -36,12 +36,51 @@ pub const POINT_BYTES: usize = crypto_core_ristretto255_BYTES as usize;
 pub const HASH_BYTES: usize = crypto_generichash_BYTES as usize;
 
 /// A secret scalar used to encrypt/decrypt cards.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Scalar(pub [u8; SCALAR_BYTES]);
+#[derive(Clone)]
+#[derive(Serialize, Deserialize)]
+pub struct Scalar(#[serde(with = "serde_base64")] pub [u8; SCALAR_BYTES]);
 
 /// A Ristretto255 point representing an encrypted (or plaintext) card.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Point(pub [u8; POINT_BYTES]);
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize)]
+pub struct Point(#[serde(with = "serde_base64")] pub [u8; POINT_BYTES]);
+
+pub mod serde_base64 {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer, const N: usize>(
+        bytes: &[u8; N],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
+        deserializer: D,
+    ) -> Result<[u8; N], D::Error> {
+        let s: &str = serde::Deserialize::deserialize(deserializer)?;
+        let vec = STANDARD
+            .decode(s)
+            .map_err(serde::de::Error::custom)?;
+        vec.try_into()
+            .map_err(|_| serde::de::Error::custom(format!("expected {} bytes", N)))
+    }
+}
+
+pub mod serde_base64_vec {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let s: &str = serde::Deserialize::deserialize(deserializer)?;
+        STANDARD.decode(s).map_err(serde::de::Error::custom)
+    }
+}
 
 impl std::fmt::Debug for Point {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
