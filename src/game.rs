@@ -78,7 +78,7 @@ pub struct GameState {
 
 impl GameState {
     pub fn new(num_players: usize, starting_chips: u64, small_blind: u64) -> Self {
-        assert!(num_players >= 2 && num_players <= 10);
+        assert!(num_players == 0 || (num_players >= 2 && num_players <= 10));
         Self {
             players: (0..num_players)
                 .map(|_| PlayerState::new(starting_chips))

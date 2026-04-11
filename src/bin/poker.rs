@@ -19,9 +19,9 @@ struct Game {
 }
 
 impl Game {
-    fn new(num_players: usize, starting_chips: u64, small_blind: u64) -> Self {
+    fn new() -> Self {
         Self {
-            state: ProtocolState::new(num_players, starting_chips, small_blind),
+            state: ProtocolState::new(),
             log: Vec::new(),
         }
     }
@@ -137,15 +137,17 @@ fn main() {
         .map(|(c, p)| (p, c))
         .collect();
 
-    let mut game = Game::new(num_players, 1000, 10);
+    let mut game = Game::new();
 
     println!("\n--- Setting up hand ---\n");
 
-    // Join
-    for p in &players {
-        game.apply(&Action::Join { player_id: p.id });
-    }
-    println!("All {} players joined.", num_players);
+    // Table
+    game.apply(&Action::Table {
+        players: player_names.clone(),
+        starting_chips: 1000,
+        small_blind: 10,
+    });
+    println!("Table established with {} players.", num_players);
 
     // Commit seeds
     for p in &players {

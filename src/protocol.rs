@@ -15,7 +15,8 @@ use crate::game::{BetAction, GameState, PlayerId, Street};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
-    WaitingForPlayers { need: usize },
+    /// No table established yet.
+    Init,
     /// Players commit hashes of their secret seeds.
     CommitSeeds,
     /// Players take turns encrypting and shuffling the deck.
@@ -45,7 +46,13 @@ pub enum DealType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
-    Join { player_id: PlayerId },
+    /// Establish the table: players, chips, blinds. First action in any game.
+    Table {
+        /// Player identifiers in seat order (DIDs in production, names for now).
+        players: Vec<String>,
+        starting_chips: u64,
+        small_blind: u64,
+    },
     CommitSeed {
         player_id: PlayerId,
         #[serde(with = "crypto::serde_base64")]
@@ -83,16 +90,17 @@ pub enum Action {
 }
 
 impl Action {
-    pub fn player_id(&self) -> PlayerId {
+    /// Returns the player who submitted this action, if applicable.
+    pub fn player_id(&self) -> Option<PlayerId> {
         match self {
-            Action::Join { player_id }
-            | Action::CommitSeed { player_id, .. }
+            Action::Table { .. } => None,
+            Action::CommitSeed { player_id, .. }
             | Action::ShuffleDeck { player_id, .. }
             | Action::LockDeck { player_id, .. }
             | Action::RevealLockKey { player_id, .. }
             | Action::Bet { player_id, .. }
             | Action::RevealHand { player_id, .. }
-            | Action::VerifySeed { player_id, .. } => *player_id,
+            | Action::VerifySeed { player_id, .. } => Some(*player_id),
         }
     }
 }
@@ -105,7 +113,6 @@ pub struct ValidAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValidActionKind {
-    Join,
     CommitSeed,
     ShuffleDeck,
     LockDeck,
@@ -133,35 +140,36 @@ pub struct ProtocolState {
 }
 
 impl ProtocolState {
-    pub fn new(num_players: usize, starting_chips: u64, small_blind: u64) -> Self {
+    pub fn new() -> Self {
         Self {
-            phase: Phase::WaitingForPlayers { need: num_players },
-            game: GameState::new(num_players, starting_chips, small_blind),
-            seed_commitments: vec![None; num_players],
+            phase: Phase::Init,
+            game: GameState::new(0, 0, 0),
+            seed_commitments: Vec::new(),
             shuffles_done: 0,
             locks_done: 0,
-            showdown_revealed: vec![false; num_players],
+            showdown_revealed: Vec::new(),
             next_deck_position: 0,
             hole_deal_queue: Vec::new(),
             deal_reveals: HashMap::new(),
-            hole_card_positions: vec![Vec::new(); num_players],
-            seeds_verified: vec![false; num_players],
+            hole_card_positions: Vec::new(),
+            seeds_verified: Vec::new(),
         }
     }
 
     pub fn apply(&mut self, action: &Action) -> crate::Result<()> {
         match (&self.phase, action) {
-            // --- Join ---
-            (Phase::WaitingForPlayers { need }, Action::Join { player_id }) => {
-                if *player_id >= self.game.num_players() {
-                    return Err(crate::Error::InvalidAction("invalid player id".into()));
+            // --- Table ---
+            (Phase::Init, Action::Table { players, starting_chips, small_blind }) => {
+                let n = players.len();
+                if n < 2 || n > 10 {
+                    return Err(crate::Error::InvalidAction("need 2-10 players".into()));
                 }
-                let remaining = need - 1;
-                if remaining == 0 {
-                    self.phase = Phase::CommitSeeds;
-                } else {
-                    self.phase = Phase::WaitingForPlayers { need: remaining };
-                }
+                self.game = GameState::new(n, *starting_chips, *small_blind);
+                self.seed_commitments = vec![None; n];
+                self.showdown_revealed = vec![false; n];
+                self.hole_card_positions = vec![Vec::new(); n];
+                self.seeds_verified = vec![false; n];
+                self.phase = Phase::CommitSeeds;
                 Ok(())
             }
 
@@ -356,13 +364,7 @@ impl ProtocolState {
 
     pub fn valid_actions(&self) -> Vec<ValidAction> {
         match &self.phase {
-            Phase::WaitingForPlayers { need } => (0..self.game.num_players())
-                .filter(|_| *need > 0)
-                .map(|pid| ValidAction {
-                    player_id: pid,
-                    kind: ValidActionKind::Join,
-                })
-                .collect(),
+            Phase::Init => vec![], // Table action is handled externally
             Phase::CommitSeeds => self
                 .seed_commitments
                 .iter()
@@ -584,52 +586,43 @@ impl ProtocolState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn initial_valid_actions() {
-        let state = ProtocolState::new(2, 1000, 10);
-        let actions = state.valid_actions();
-        assert_eq!(actions.len(), 2);
-        assert!(matches!(actions[0].kind, ValidActionKind::Join));
+    fn setup_table(n: usize) -> ProtocolState {
+        let mut state = ProtocolState::new();
+        let players: Vec<String> = (0..n).map(|i| format!("did:example:player{}", i)).collect();
+        state.apply(&Action::Table {
+            players,
+            starting_chips: 1000,
+            small_blind: 10,
+        }).unwrap();
+        state
     }
 
     #[test]
-    fn join_transitions_to_commit() {
-        let mut state = ProtocolState::new(2, 1000, 10);
-        state.apply(&Action::Join { player_id: 0 }).unwrap();
-        assert!(matches!(state.phase, Phase::WaitingForPlayers { need: 1 }));
-        state.apply(&Action::Join { player_id: 1 }).unwrap();
+    fn table_transitions_to_commit() {
+        let state = setup_table(2);
         assert!(matches!(state.phase, Phase::CommitSeeds));
+        assert_eq!(state.game.num_players(), 2);
+        let actions = state.valid_actions();
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0].kind, ValidActionKind::CommitSeed));
     }
 
     #[test]
     fn commit_goes_to_shuffle() {
-        let mut state = ProtocolState::new(2, 1000, 10);
-        state.apply(&Action::Join { player_id: 0 }).unwrap();
-        state.apply(&Action::Join { player_id: 1 }).unwrap();
+        let mut state = setup_table(2);
 
         let hash0 = crypto::blake2b(b"seed0").unwrap();
         let hash1 = crypto::blake2b(b"seed1").unwrap();
 
-        state
-            .apply(&Action::CommitSeed {
-                player_id: 0,
-                commitment: hash0,
-            })
-            .unwrap();
-        state
-            .apply(&Action::CommitSeed {
-                player_id: 1,
-                commitment: hash1,
-            })
-            .unwrap();
-        // Should go directly to Shuffle, not RevealSeeds
+        state.apply(&Action::CommitSeed { player_id: 0, commitment: hash0 }).unwrap();
+        state.apply(&Action::CommitSeed { player_id: 1, commitment: hash1 }).unwrap();
         assert!(matches!(state.phase, Phase::Shuffle { next_player: 0 }));
         assert_eq!(state.game.deck.len(), 52);
     }
 
     #[test]
     fn verify_seed_after_complete() {
-        let mut state = ProtocolState::new(2, 1000, 10);
+        let mut state = setup_table(2);
         state.phase = Phase::Complete;
         let seed = b"my_seed".to_vec();
         let hash = crypto::blake2b(&seed).unwrap();

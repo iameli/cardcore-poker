@@ -49,7 +49,7 @@ impl SimPlayer {
 /// Drive a complete 2-player hand and verify seed replay at the end.
 #[test]
 fn full_hand_with_seed_verification() {
-    let mut state = ProtocolState::new(2, 1000, 10);
+    let mut state = ProtocolState::new();
     let mut players: Vec<SimPlayer> = (0..2).map(SimPlayer::new).collect();
 
     let card_map: HashMap<Point, Card> = crypto::card_points()
@@ -58,12 +58,14 @@ fn full_hand_with_seed_verification() {
         .map(|(c, p)| (p, c))
         .collect();
 
-    // Join
-    for p in &players {
-        state.apply(&Action::Join { player_id: p.id }).unwrap();
-    }
+    // Table
+    state.apply(&Action::Table {
+        players: (0..2).map(|i| format!("did:example:player{}", i)).collect(),
+        starting_chips: 1000,
+        small_blind: 10,
+    }).unwrap();
 
-    // Commit seeds (no reveal during game)
+    // Commit seeds
     for p in &players {
         state
             .apply(&Action::CommitSeed {
@@ -167,8 +169,15 @@ fn fuzz_random_actions() {
     for seed in 0..20 {
         let mut rng = StdRng::seed_from_u64(seed);
         let num_players = rng.random_range(2..=4);
-        let mut state = ProtocolState::new(num_players, 1000, 10);
+        let mut state = ProtocolState::new();
         let mut players: Vec<SimPlayer> = (0..num_players).map(SimPlayer::new).collect();
+
+        // Table
+        state.apply(&Action::Table {
+            players: (0..num_players).map(|i| format!("did:example:player{}", i)).collect(),
+            starting_chips: 1000,
+            small_blind: 10,
+        }).unwrap();
 
         let mut steps = 0;
         let max_steps = 10000;
@@ -211,9 +220,6 @@ fn make_action(
     rng: &mut impl Rng,
 ) -> Action {
     match &va.kind {
-        ValidActionKind::Join => Action::Join {
-            player_id: va.player_id,
-        },
         ValidActionKind::CommitSeed => Action::CommitSeed {
             player_id: va.player_id,
             commitment: players[va.player_id].commitment(),
