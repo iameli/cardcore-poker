@@ -909,37 +909,37 @@ pub mod position_scalar_state {
     }
     /// State trait tracking which required fields have been set
     pub trait State: sealed::Sealed {
-        type Scalar;
         type DeckPosition;
+        type Scalar;
     }
     /// Empty state - all required fields are unset
     pub struct Empty(());
     impl sealed::Sealed for Empty {}
     impl State for Empty {
-        type Scalar = Unset;
         type DeckPosition = Unset;
-    }
-    ///State transition - sets the `scalar` field to Set
-    pub struct SetScalar<S: State = Empty>(PhantomData<fn() -> S>);
-    impl<S: State> sealed::Sealed for SetScalar<S> {}
-    impl<S: State> State for SetScalar<S> {
-        type Scalar = Set<members::scalar>;
-        type DeckPosition = S::DeckPosition;
+        type Scalar = Unset;
     }
     ///State transition - sets the `deck_position` field to Set
     pub struct SetDeckPosition<S: State = Empty>(PhantomData<fn() -> S>);
     impl<S: State> sealed::Sealed for SetDeckPosition<S> {}
     impl<S: State> State for SetDeckPosition<S> {
-        type Scalar = S::Scalar;
         type DeckPosition = Set<members::deck_position>;
+        type Scalar = S::Scalar;
+    }
+    ///State transition - sets the `scalar` field to Set
+    pub struct SetScalar<S: State = Empty>(PhantomData<fn() -> S>);
+    impl<S: State> sealed::Sealed for SetScalar<S> {}
+    impl<S: State> State for SetScalar<S> {
+        type DeckPosition = S::DeckPosition;
+        type Scalar = Set<members::scalar>;
     }
     /// Marker types for field names
     #[allow(non_camel_case_types)]
     pub mod members {
-        ///Marker type for the `scalar` field
-        pub struct scalar(());
         ///Marker type for the `deck_position` field
         pub struct deck_position(());
+        ///Marker type for the `scalar` field
+        pub struct scalar(());
     }
 }
 
@@ -1009,8 +1009,8 @@ where
 impl<'a, S> PositionScalarBuilder<'a, S>
 where
     S: position_scalar_state::State,
-    S::Scalar: position_scalar_state::IsSet,
     S::DeckPosition: position_scalar_state::IsSet,
+    S::Scalar: position_scalar_state::IsSet,
 {
     /// Build the final struct
     pub fn build(self) -> PositionScalar<'a> {
@@ -1149,37 +1149,37 @@ pub mod reveal_lock_key_state {
     }
     /// State trait tracking which required fields have been set
     pub trait State: sealed::Sealed {
-        type Scalar;
         type DeckPosition;
+        type Scalar;
     }
     /// Empty state - all required fields are unset
     pub struct Empty(());
     impl sealed::Sealed for Empty {}
     impl State for Empty {
-        type Scalar = Unset;
         type DeckPosition = Unset;
-    }
-    ///State transition - sets the `scalar` field to Set
-    pub struct SetScalar<S: State = Empty>(PhantomData<fn() -> S>);
-    impl<S: State> sealed::Sealed for SetScalar<S> {}
-    impl<S: State> State for SetScalar<S> {
-        type Scalar = Set<members::scalar>;
-        type DeckPosition = S::DeckPosition;
+        type Scalar = Unset;
     }
     ///State transition - sets the `deck_position` field to Set
     pub struct SetDeckPosition<S: State = Empty>(PhantomData<fn() -> S>);
     impl<S: State> sealed::Sealed for SetDeckPosition<S> {}
     impl<S: State> State for SetDeckPosition<S> {
-        type Scalar = S::Scalar;
         type DeckPosition = Set<members::deck_position>;
+        type Scalar = S::Scalar;
+    }
+    ///State transition - sets the `scalar` field to Set
+    pub struct SetScalar<S: State = Empty>(PhantomData<fn() -> S>);
+    impl<S: State> sealed::Sealed for SetScalar<S> {}
+    impl<S: State> State for SetScalar<S> {
+        type DeckPosition = S::DeckPosition;
+        type Scalar = Set<members::scalar>;
     }
     /// Marker types for field names
     #[allow(non_camel_case_types)]
     pub mod members {
-        ///Marker type for the `scalar` field
-        pub struct scalar(());
         ///Marker type for the `deck_position` field
         pub struct deck_position(());
+        ///Marker type for the `scalar` field
+        pub struct scalar(());
     }
 }
 
@@ -1249,8 +1249,8 @@ where
 impl<'a, S> RevealLockKeyBuilder<'a, S>
 where
     S: reveal_lock_key_state::State,
-    S::Scalar: reveal_lock_key_state::IsSet,
     S::DeckPosition: reveal_lock_key_state::IsSet,
+    S::Scalar: reveal_lock_key_state::IsSet,
 {
     /// Build the final struct
     pub fn build(self) -> RevealLockKey<'a> {

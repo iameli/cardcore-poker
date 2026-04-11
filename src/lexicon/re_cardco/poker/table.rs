@@ -159,8 +159,8 @@ pub mod table_state {
     /// State trait tracking which required fields have been set
     pub trait State: sealed::Sealed {
         type Players;
-        type SmallBlind;
         type StartingChips;
+        type SmallBlind;
         type CreatedAt;
     }
     /// Empty state - all required fields are unset
@@ -168,8 +168,8 @@ pub mod table_state {
     impl sealed::Sealed for Empty {}
     impl State for Empty {
         type Players = Unset;
-        type SmallBlind = Unset;
         type StartingChips = Unset;
+        type SmallBlind = Unset;
         type CreatedAt = Unset;
     }
     ///State transition - sets the `players` field to Set
@@ -177,17 +177,8 @@ pub mod table_state {
     impl<S: State> sealed::Sealed for SetPlayers<S> {}
     impl<S: State> State for SetPlayers<S> {
         type Players = Set<members::players>;
+        type StartingChips = S::StartingChips;
         type SmallBlind = S::SmallBlind;
-        type StartingChips = S::StartingChips;
-        type CreatedAt = S::CreatedAt;
-    }
-    ///State transition - sets the `small_blind` field to Set
-    pub struct SetSmallBlind<S: State = Empty>(PhantomData<fn() -> S>);
-    impl<S: State> sealed::Sealed for SetSmallBlind<S> {}
-    impl<S: State> State for SetSmallBlind<S> {
-        type Players = S::Players;
-        type SmallBlind = Set<members::small_blind>;
-        type StartingChips = S::StartingChips;
         type CreatedAt = S::CreatedAt;
     }
     ///State transition - sets the `starting_chips` field to Set
@@ -195,8 +186,17 @@ pub mod table_state {
     impl<S: State> sealed::Sealed for SetStartingChips<S> {}
     impl<S: State> State for SetStartingChips<S> {
         type Players = S::Players;
-        type SmallBlind = S::SmallBlind;
         type StartingChips = Set<members::starting_chips>;
+        type SmallBlind = S::SmallBlind;
+        type CreatedAt = S::CreatedAt;
+    }
+    ///State transition - sets the `small_blind` field to Set
+    pub struct SetSmallBlind<S: State = Empty>(PhantomData<fn() -> S>);
+    impl<S: State> sealed::Sealed for SetSmallBlind<S> {}
+    impl<S: State> State for SetSmallBlind<S> {
+        type Players = S::Players;
+        type StartingChips = S::StartingChips;
+        type SmallBlind = Set<members::small_blind>;
         type CreatedAt = S::CreatedAt;
     }
     ///State transition - sets the `created_at` field to Set
@@ -204,8 +204,8 @@ pub mod table_state {
     impl<S: State> sealed::Sealed for SetCreatedAt<S> {}
     impl<S: State> State for SetCreatedAt<S> {
         type Players = S::Players;
-        type SmallBlind = S::SmallBlind;
         type StartingChips = S::StartingChips;
+        type SmallBlind = S::SmallBlind;
         type CreatedAt = Set<members::created_at>;
     }
     /// Marker types for field names
@@ -213,10 +213,10 @@ pub mod table_state {
     pub mod members {
         ///Marker type for the `players` field
         pub struct players(());
-        ///Marker type for the `small_blind` field
-        pub struct small_blind(());
         ///Marker type for the `starting_chips` field
         pub struct starting_chips(());
+        ///Marker type for the `small_blind` field
+        pub struct small_blind(());
         ///Marker type for the `created_at` field
         pub struct created_at(());
     }
@@ -327,8 +327,8 @@ impl<'a, S> TableBuilder<'a, S>
 where
     S: table_state::State,
     S::Players: table_state::IsSet,
-    S::SmallBlind: table_state::IsSet,
     S::StartingChips: table_state::IsSet,
+    S::SmallBlind: table_state::IsSet,
     S::CreatedAt: table_state::IsSet,
 {
     /// Build the final struct

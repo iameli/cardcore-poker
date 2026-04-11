@@ -33,7 +33,7 @@ use crate::lexicon::re_cardco::poker::RevealHand;
 use crate::lexicon::re_cardco::poker::RevealLockKey;
 use crate::lexicon::re_cardco::poker::ShuffleDeck;
 use crate::lexicon::re_cardco::poker::VerifySeed;
-/// A single action in a poker hand. All actions reference the table they belong to.
+/// A single action in a poker hand. Key format: {table-tid}-{sequence-number}. Each action chains back to the previous via prev.
 
 #[lexicon]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, IntoStatic)]
@@ -43,6 +43,12 @@ pub struct Action<'a> {
     #[serde(borrow)]
     pub action: ActionAction<'a>,
     pub created_at: Datetime,
+    ///Reference to the previous action in this hand. Absent for the first action (seq 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(borrow)]
+    pub prev: Option<Data<'a>>,
+    ///Action sequence number within this hand, starting from 0.
+    pub seq: i64,
     ///Reference to the table record for this hand.
     #[serde(borrow)]
     pub table: Data<'a>,
@@ -130,6 +136,16 @@ impl<'a> LexiconSchema for Action<'a> {
         lexicon_doc_re_cardco_poker_action()
     }
     fn validate(&self) -> Result<(), ConstraintError> {
+        {
+            let value = &self.seq;
+            if *value < 0i64 {
+                return Err(ConstraintError::Minimum {
+                    path: ValidationPath::from_field("seq"),
+                    min: 0i64,
+                    actual: *value,
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -144,58 +160,80 @@ pub mod action_state {
     }
     /// State trait tracking which required fields have been set
     pub trait State: sealed::Sealed {
-        type Action;
         type Table;
         type CreatedAt;
+        type Action;
+        type Seq;
     }
     /// Empty state - all required fields are unset
     pub struct Empty(());
     impl sealed::Sealed for Empty {}
     impl State for Empty {
-        type Action = Unset;
         type Table = Unset;
         type CreatedAt = Unset;
-    }
-    ///State transition - sets the `action` field to Set
-    pub struct SetAction<S: State = Empty>(PhantomData<fn() -> S>);
-    impl<S: State> sealed::Sealed for SetAction<S> {}
-    impl<S: State> State for SetAction<S> {
-        type Action = Set<members::action>;
-        type Table = S::Table;
-        type CreatedAt = S::CreatedAt;
+        type Action = Unset;
+        type Seq = Unset;
     }
     ///State transition - sets the `table` field to Set
     pub struct SetTable<S: State = Empty>(PhantomData<fn() -> S>);
     impl<S: State> sealed::Sealed for SetTable<S> {}
     impl<S: State> State for SetTable<S> {
-        type Action = S::Action;
         type Table = Set<members::table>;
         type CreatedAt = S::CreatedAt;
+        type Action = S::Action;
+        type Seq = S::Seq;
     }
     ///State transition - sets the `created_at` field to Set
     pub struct SetCreatedAt<S: State = Empty>(PhantomData<fn() -> S>);
     impl<S: State> sealed::Sealed for SetCreatedAt<S> {}
     impl<S: State> State for SetCreatedAt<S> {
-        type Action = S::Action;
         type Table = S::Table;
         type CreatedAt = Set<members::created_at>;
+        type Action = S::Action;
+        type Seq = S::Seq;
+    }
+    ///State transition - sets the `action` field to Set
+    pub struct SetAction<S: State = Empty>(PhantomData<fn() -> S>);
+    impl<S: State> sealed::Sealed for SetAction<S> {}
+    impl<S: State> State for SetAction<S> {
+        type Table = S::Table;
+        type CreatedAt = S::CreatedAt;
+        type Action = Set<members::action>;
+        type Seq = S::Seq;
+    }
+    ///State transition - sets the `seq` field to Set
+    pub struct SetSeq<S: State = Empty>(PhantomData<fn() -> S>);
+    impl<S: State> sealed::Sealed for SetSeq<S> {}
+    impl<S: State> State for SetSeq<S> {
+        type Table = S::Table;
+        type CreatedAt = S::CreatedAt;
+        type Action = S::Action;
+        type Seq = Set<members::seq>;
     }
     /// Marker types for field names
     #[allow(non_camel_case_types)]
     pub mod members {
-        ///Marker type for the `action` field
-        pub struct action(());
         ///Marker type for the `table` field
         pub struct table(());
         ///Marker type for the `created_at` field
         pub struct created_at(());
+        ///Marker type for the `action` field
+        pub struct action(());
+        ///Marker type for the `seq` field
+        pub struct seq(());
     }
 }
 
 /// Builder for constructing an instance of this type
 pub struct ActionBuilder<'a, S: action_state::State> {
     _state: PhantomData<fn() -> S>,
-    _fields: (Option<ActionAction<'a>>, Option<Datetime>, Option<Data<'a>>),
+    _fields: (
+        Option<ActionAction<'a>>,
+        Option<Datetime>,
+        Option<Data<'a>>,
+        Option<i64>,
+        Option<Data<'a>>,
+    ),
     _lifetime: PhantomData<&'a ()>,
 }
 
@@ -211,7 +249,7 @@ impl<'a> ActionBuilder<'a, action_state::Empty> {
     pub fn new() -> Self {
         ActionBuilder {
             _state: PhantomData,
-            _fields: (None, None, None),
+            _fields: (None, None, None, None, None),
             _lifetime: PhantomData,
         }
     }
@@ -255,17 +293,30 @@ where
     }
 }
 
+impl<'a, S: action_state::State> ActionBuilder<'a, S> {
+    /// Set the `prev` field (optional)
+    pub fn prev(mut self, value: impl Into<Option<Data<'a>>>) -> Self {
+        self._fields.2 = value.into();
+        self
+    }
+    /// Set the `prev` field to an Option value (optional)
+    pub fn maybe_prev(mut self, value: Option<Data<'a>>) -> Self {
+        self._fields.2 = value;
+        self
+    }
+}
+
 impl<'a, S> ActionBuilder<'a, S>
 where
     S: action_state::State,
-    S::Table: action_state::IsUnset,
+    S::Seq: action_state::IsUnset,
 {
-    /// Set the `table` field (required)
-    pub fn table(
+    /// Set the `seq` field (required)
+    pub fn seq(
         mut self,
-        value: impl Into<Data<'a>>,
-    ) -> ActionBuilder<'a, action_state::SetTable<S>> {
-        self._fields.2 = Option::Some(value.into());
+        value: impl Into<i64>,
+    ) -> ActionBuilder<'a, action_state::SetSeq<S>> {
+        self._fields.3 = Option::Some(value.into());
         ActionBuilder {
             _state: PhantomData,
             _fields: self._fields,
@@ -277,16 +328,38 @@ where
 impl<'a, S> ActionBuilder<'a, S>
 where
     S: action_state::State,
-    S::Action: action_state::IsSet,
+    S::Table: action_state::IsUnset,
+{
+    /// Set the `table` field (required)
+    pub fn table(
+        mut self,
+        value: impl Into<Data<'a>>,
+    ) -> ActionBuilder<'a, action_state::SetTable<S>> {
+        self._fields.4 = Option::Some(value.into());
+        ActionBuilder {
+            _state: PhantomData,
+            _fields: self._fields,
+            _lifetime: PhantomData,
+        }
+    }
+}
+
+impl<'a, S> ActionBuilder<'a, S>
+where
+    S: action_state::State,
     S::Table: action_state::IsSet,
     S::CreatedAt: action_state::IsSet,
+    S::Action: action_state::IsSet,
+    S::Seq: action_state::IsSet,
 {
     /// Build the final struct
     pub fn build(self) -> Action<'a> {
         Action {
             action: self._fields.0.unwrap(),
             created_at: self._fields.1.unwrap(),
-            table: self._fields.2.unwrap(),
+            prev: self._fields.2,
+            seq: self._fields.3.unwrap(),
+            table: self._fields.4.unwrap(),
             extra_data: Default::default(),
         }
     }
@@ -298,7 +371,9 @@ where
         Action {
             action: self._fields.0.unwrap(),
             created_at: self._fields.1.unwrap(),
-            table: self._fields.2.unwrap(),
+            prev: self._fields.2,
+            seq: self._fields.3.unwrap(),
+            table: self._fields.4.unwrap(),
             extra_data: Some(extra_data),
         }
     }
@@ -319,14 +394,15 @@ fn lexicon_doc_re_cardco_poker_action() -> LexiconDoc<'static> {
                 LexUserType::Record(LexRecord {
                     description: Some(
                         CowStr::new_static(
-                            "A single action in a poker hand. All actions reference the table they belong to.",
+                            "A single action in a poker hand. Key format: {table-tid}-{sequence-number}. Each action chains back to the previous via prev.",
                         ),
                     ),
-                    key: Some(CowStr::new_static("tid")),
+                    key: Some(CowStr::new_static("any")),
                     record: LexRecordRecord::Object(LexObject {
                         required: Some(
                             vec![
-                                SmolStr::new_static("table"), SmolStr::new_static("action"),
+                                SmolStr::new_static("table"), SmolStr::new_static("seq"),
+                                SmolStr::new_static("action"),
                                 SmolStr::new_static("createdAt")
                             ],
                         ),
@@ -355,6 +431,20 @@ fn lexicon_doc_re_cardco_poker_action() -> LexiconDoc<'static> {
                                 SmolStr::new_static("createdAt"),
                                 LexObjectProperty::String(LexString {
                                     format: Some(LexStringFormat::Datetime),
+                                    ..Default::default()
+                                }),
+                            );
+                            map.insert(
+                                SmolStr::new_static("prev"),
+                                LexObjectProperty::Ref(LexRef {
+                                    r#ref: CowStr::new_static("com.atproto.repo.strongRef"),
+                                    ..Default::default()
+                                }),
+                            );
+                            map.insert(
+                                SmolStr::new_static("seq"),
+                                LexObjectProperty::Integer(LexInteger {
+                                    minimum: Some(0i64),
                                     ..Default::default()
                                 }),
                             );

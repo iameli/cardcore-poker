@@ -4,16 +4,26 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A single action in a poker hand. All actions reference the table they belong to.",
-      "key": "tid",
+      "description": "A single action in a poker hand. Key format: {table-tid}-{sequence-number}. Each action chains back to the previous via prev.",
+      "key": "any",
       "record": {
         "type": "object",
-        "required": ["table", "action", "createdAt"],
+        "required": ["table", "seq", "action", "createdAt"],
         "properties": {
           "table": {
             "type": "ref",
             "ref": "com.atproto.repo.strongRef",
             "description": "Reference to the table record for this hand."
+          },
+          "prev": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Reference to the previous action in this hand. Absent for the first action (seq 0)."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Action sequence number within this hand, starting from 0."
           },
           "action": {
             "type": "union",
