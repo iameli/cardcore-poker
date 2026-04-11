@@ -1,0 +1,39 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.action",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A single action in a poker hand. All actions reference the table they belong to.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["table", "action", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Reference to the table record for this hand."
+          },
+          "action": {
+            "type": "union",
+            "refs": [
+              "re.cardco.poker.defs#commitSeed",
+              "re.cardco.poker.defs#shuffleDeck",
+              "re.cardco.poker.defs#lockDeck",
+              "re.cardco.poker.defs#revealLockKey",
+              "re.cardco.poker.defs#bet",
+              "re.cardco.poker.defs#revealHand",
+              "re.cardco.poker.defs#verifySeed"
+            ],
+            "description": "The action payload."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}
