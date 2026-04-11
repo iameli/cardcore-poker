@@ -1,5 +1,6 @@
 extern crate alloc;
 
+pub mod agent;
 pub mod card;
 pub mod crypto;
 pub mod error;
