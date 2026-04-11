@@ -41,6 +41,11 @@ impl Player {
         encrypted.shuffle(rng);
         encrypted
     }
+
+    fn lock_deck(&mut self, deck: &[Point]) -> Vec<Point> {
+        self.keys.generate_lock_keys(deck.len()).unwrap();
+        self.keys.lock_deck(deck).unwrap()
+    }
 }
 
 fn point_to_card(point: &Point, card_map: &HashMap<Point, Card>) -> Option<Card> {
@@ -92,7 +97,7 @@ fn main() {
     let starting_chips: u64 = 1000;
     let small_blind: u64 = 10;
 
-    let players: Vec<Player> = player_names
+    let mut players: Vec<Player> = player_names
         .iter()
         .enumerate()
         .map(|(i, name)| Player::new(i, name.clone()))
@@ -110,13 +115,13 @@ fn main() {
 
     println!("\n--- Setting up hand ---\n");
 
-    // Auto: join
+    // Join
     for p in &players {
         state.apply(&Action::Join { player_id: p.id }).unwrap();
     }
     println!("All {} players joined.", num_players);
 
-    // Auto: commit seeds
+    // Commit seeds
     for p in &players {
         state
             .apply(&Action::CommitSeed {
@@ -127,7 +132,7 @@ fn main() {
     }
     println!("Seeds committed.");
 
-    // Auto: reveal seeds
+    // Reveal seeds
     for p in &players {
         state
             .apply(&Action::RevealSeed {
@@ -138,7 +143,7 @@ fn main() {
     }
     println!("Seeds revealed and combined.");
 
-    // Auto: shuffle
+    // Shuffle phase
     for p in &players {
         let shuffled = p.encrypt_and_shuffle(&state.game.deck, &mut rng);
         state
@@ -148,6 +153,18 @@ fn main() {
             })
             .unwrap();
         println!("{} shuffled the deck.", p.name);
+    }
+
+    // Lock phase
+    for i in 0..players.len() {
+        let locked = players[i].lock_deck(&state.game.deck);
+        state
+            .apply(&Action::LockDeck {
+                player_id: i,
+                deck: locked,
+            })
+            .unwrap();
+        println!("{} locked the deck.", players[i].name);
     }
 
     println!(
@@ -164,8 +181,9 @@ fn main() {
     let mut player_hole_cards: Vec<Vec<Card>> = Vec::new();
     for p in &players {
         let mut cards = Vec::new();
-        for encrypted_point in &state.game.players[p.id].hole_encrypted {
-            let decrypted = p.keys.decrypt_point(encrypted_point).unwrap();
+        for (idx, encrypted_point) in state.game.players[p.id].hole_encrypted.iter().enumerate() {
+            let pos = state.hole_card_positions[p.id][idx];
+            let decrypted = crypto::decrypt(encrypted_point, &p.keys.lock_decrypt[pos]).unwrap();
             if let Some(card) = point_to_card(&decrypted, &card_map) {
                 cards.push(card);
             } else {
@@ -242,10 +260,14 @@ fn main() {
                     if state.game.players[p.id].folded {
                         continue;
                     }
+                    let scalars: Vec<(usize, _)> = state.hole_card_positions[p.id]
+                        .iter()
+                        .map(|pos| (*pos, p.keys.lock_decrypt[*pos].clone()))
+                        .collect();
                     state
                         .apply(&Action::RevealHand {
                             player_id: p.id,
-                            scalar: p.keys.decrypt.clone(),
+                            scalars,
                         })
                         .unwrap();
                 }
@@ -345,23 +367,16 @@ fn deal_phase(state: &mut ProtocolState, players: &[Player]) {
         if actions.is_empty() {
             break;
         }
-        let va = &actions[0];
-        if let ValidActionKind::DecryptCard { deck_position } = &va.kind {
-            let current_point = match &state.phase {
-                Phase::Dealing { current_point, .. } => current_point.clone(),
-                _ => break,
-            };
-            let result = players[va.player_id]
-                .keys
-                .decrypt_point(&current_point)
-                .unwrap();
-            state
-                .apply(&Action::DecryptCard {
-                    player_id: va.player_id,
-                    deck_position: *deck_position,
-                    result,
-                })
-                .unwrap();
+        for va in &actions {
+            if let ValidActionKind::RevealLockKey { deck_position } = &va.kind {
+                state
+                    .apply(&Action::RevealLockKey {
+                        player_id: va.player_id,
+                        deck_position: *deck_position,
+                        scalar: players[va.player_id].keys.lock_decrypt[*deck_position].clone(),
+                    })
+                    .unwrap();
+            }
         }
     }
 }
@@ -432,9 +447,10 @@ fn prompt_bet(player: &Player, options: &[BetAction], state: &ProtocolState) -> 
                 BetAction::Fold => "Fold".to_string(),
                 BetAction::Check => "Check".to_string(),
                 BetAction::Call => {
-                    let to_call = state.game.current_bet.saturating_sub(
-                        state.game.players[player.id].bet_this_street,
-                    );
+                    let to_call = state
+                        .game
+                        .current_bet
+                        .saturating_sub(state.game.players[player.id].bet_this_street);
                     format!("Call ({})", to_call)
                 }
                 BetAction::Raise(amount) => format!("Raise to {}", amount),
@@ -451,9 +467,10 @@ fn prompt_bet(player: &Player, options: &[BetAction], state: &ProtocolState) -> 
             let amount_str = input[1..].trim();
             if let Ok(amount) = amount_str.parse::<u64>() {
                 let min_raise = state.game.big_blind;
-                let to_call = state.game.current_bet.saturating_sub(
-                    state.game.players[player.id].bet_this_street,
-                );
+                let to_call = state
+                    .game
+                    .current_bet
+                    .saturating_sub(state.game.players[player.id].bet_this_street);
                 if amount > to_call + min_raise && amount <= state.game.players[player.id].chips {
                     return BetAction::Raise(amount);
                 } else {

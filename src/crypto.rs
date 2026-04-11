@@ -6,7 +6,12 @@
 //!
 //!   k_a * (k_b * P) = k_b * (k_a * P)
 //!
-//! All operations use libsodium's Ristretto255 API — no custom crypto.
+//! Two-phase protocol:
+//! 1. Shuffle phase: each player encrypts all cards with ONE scalar, shuffles.
+//! 2. Lock phase: each player removes their shuffle key and re-encrypts each card
+//!    with a unique per-position lock key.
+//!
+//! Dealing reveals per-position lock scalars — verifiable by anyone.
 
 use libsodium_sys::*;
 use serde::{Deserialize, Serialize};
@@ -41,7 +46,6 @@ pub struct Point(pub [u8; POINT_BYTES]);
 
 impl std::fmt::Debug for Point {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Show first 8 bytes as hex for debugging
         let hex: String = self.0[..8].iter().map(|b| format!("{:02x}", b)).collect();
         write!(f, "Point({})", hex)
     }
@@ -53,32 +57,62 @@ impl std::fmt::Debug for Scalar {
     }
 }
 
-/// A player's encryption key pair.
-/// Single key per player — used to encrypt all cards during shuffle.
-/// During dealing, players apply their decryption to specific cards
-/// and send the resulting point (not the scalar) to avoid leaking the key.
+/// A player's keys for the two-phase protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerKeys {
-    pub encrypt: Scalar,
-    pub decrypt: Scalar,
+    /// Single key used to encrypt all cards during shuffle.
+    pub shuffle_encrypt: Scalar,
+    pub shuffle_decrypt: Scalar,
+    /// Per-position lock keys (generated during lock phase, one per card).
+    pub lock_encrypt: Vec<Scalar>,
+    pub lock_decrypt: Vec<Scalar>,
 }
 
 impl PlayerKeys {
-    /// Generate a fresh random key pair.
+    /// Generate shuffle keys. Lock keys are generated later during the lock phase.
     pub fn generate() -> crate::Result<Self> {
         init()?;
-        let (encrypt, decrypt) = generate_keypair()?;
-        Ok(Self { encrypt, decrypt })
+        let (shuffle_encrypt, shuffle_decrypt) = generate_keypair()?;
+        Ok(Self {
+            shuffle_encrypt,
+            shuffle_decrypt,
+            lock_encrypt: Vec::new(),
+            lock_decrypt: Vec::new(),
+        })
     }
 
-    /// Encrypt all cards in a deck with this player's key.
+    /// Generate per-position lock keys for `n` cards.
+    pub fn generate_lock_keys(&mut self, n: usize) -> crate::Result<()> {
+        init()?;
+        self.lock_encrypt = Vec::with_capacity(n);
+        self.lock_decrypt = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (e, d) = generate_keypair()?;
+            self.lock_encrypt.push(e);
+            self.lock_decrypt.push(d);
+        }
+        Ok(())
+    }
+
+    /// Shuffle phase: encrypt all cards with the single shuffle key.
     pub fn encrypt_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
-        deck.iter().map(|p| encrypt(p, &self.encrypt)).collect()
+        deck.iter()
+            .map(|p| encrypt(p, &self.shuffle_encrypt))
+            .collect()
     }
 
-    /// Decrypt a single card point with this player's key.
-    pub fn decrypt_point(&self, point: &Point) -> crate::Result<Point> {
-        decrypt(point, &self.decrypt)
+    /// Lock phase: remove shuffle encryption and apply per-position lock key.
+    /// Input deck must still have this player's shuffle encryption on it.
+    pub fn lock_deck(&self, deck: &[Point]) -> crate::Result<Vec<Point>> {
+        deck.iter()
+            .enumerate()
+            .map(|(i, p)| {
+                // Remove shuffle key
+                let unlocked = decrypt(p, &self.shuffle_decrypt)?;
+                // Apply position lock key
+                encrypt(&unlocked, &self.lock_encrypt[i])
+            })
+            .collect()
     }
 }
 
@@ -99,8 +133,6 @@ pub fn generate_keypair() -> crate::Result<(Scalar, Scalar)> {
 /// Map a card to a unique Ristretto255 point via hash-to-group.
 pub fn card_to_point(card: &Card) -> crate::Result<Point> {
     init()?;
-    // Hash the card's canonical string representation to 64 bytes,
-    // then use ristretto255_from_hash to map to a curve point.
     let label = format!("cardcore-poker:card:{}", card);
     let mut hash = [0u8; 64];
     unsafe {
@@ -146,12 +178,11 @@ pub fn encrypt(point: &Point, scalar: &Scalar) -> crate::Result<Point> {
 }
 
 /// Decrypt (unlock) a point by multiplying by the scalar's inverse.
-/// This is the same operation as encrypt, just with the inverse scalar.
 pub fn decrypt(point: &Point, inverse_scalar: &Scalar) -> crate::Result<Point> {
     encrypt(point, inverse_scalar)
 }
 
-/// Hash arbitrary data with BLAKE2b (used for RNG seed commitment, state hashing, etc.)
+/// Hash arbitrary data with BLAKE2b.
 pub fn blake2b(data: &[u8]) -> crate::Result<[u8; HASH_BYTES]> {
     init()?;
     let mut out = [0u8; HASH_BYTES];
@@ -194,17 +225,13 @@ mod tests {
         let (k_a, d_a) = generate_keypair().unwrap();
         let (k_b, d_b) = generate_keypair().unwrap();
 
-        // Encrypt A then B
         let ab = encrypt(&encrypt(&point, &k_a).unwrap(), &k_b).unwrap();
-        // Encrypt B then A
         let ba = encrypt(&encrypt(&point, &k_b).unwrap(), &k_a).unwrap();
         assert_eq!(ab, ba);
 
-        // Decrypt in opposite order: remove A first, then B
         let dec_a_first = decrypt(&decrypt(&ab, &d_a).unwrap(), &d_b).unwrap();
         assert_eq!(dec_a_first, point);
 
-        // Decrypt B first, then A
         let dec_b_first = decrypt(&decrypt(&ab, &d_b).unwrap(), &d_a).unwrap();
         assert_eq!(dec_b_first, point);
     }
@@ -215,5 +242,42 @@ mod tests {
         assert_eq!(points.len(), 52);
         let unique: std::collections::HashSet<_> = points.iter().map(|(_, p)| p.clone()).collect();
         assert_eq!(unique.len(), 52);
+    }
+
+    #[test]
+    fn two_phase_roundtrip() {
+        // Simulate the full two-phase protocol with 2 players
+        let card = Card::new(Rank::Ace, Suit::Spades);
+        let point = card_to_point(&card).unwrap();
+
+        let mut alice = PlayerKeys::generate().unwrap();
+        let mut bob = PlayerKeys::generate().unwrap();
+
+        // Shuffle phase: both encrypt with shuffle keys
+        let after_alice = encrypt(&point, &alice.shuffle_encrypt).unwrap();
+        let after_both = encrypt(&after_alice, &bob.shuffle_encrypt).unwrap();
+
+        // Lock phase: each removes shuffle key, adds lock key
+        alice.generate_lock_keys(1).unwrap();
+        bob.generate_lock_keys(1).unwrap();
+
+        // Alice locks (removes her shuffle, adds her lock)
+        let alice_unlocked = decrypt(&after_both, &alice.shuffle_decrypt).unwrap();
+        let alice_locked = encrypt(&alice_unlocked, &alice.lock_encrypt[0]).unwrap();
+
+        // Bob locks (removes his shuffle, adds his lock)
+        let bob_unlocked = decrypt(&alice_locked, &bob.shuffle_decrypt).unwrap();
+        let bob_locked = encrypt(&bob_unlocked, &bob.lock_encrypt[0]).unwrap();
+
+        // Now card is: lock_a_0 · lock_b_0 · P
+        // To reveal: apply both lock decrypts (order doesn't matter)
+        let remove_alice = decrypt(&bob_locked, &alice.lock_decrypt[0]).unwrap();
+        let final_point = decrypt(&remove_alice, &bob.lock_decrypt[0]).unwrap();
+        assert_eq!(final_point, point);
+
+        // Other order works too
+        let remove_bob = decrypt(&bob_locked, &bob.lock_decrypt[0]).unwrap();
+        let final_point2 = decrypt(&remove_bob, &alice.lock_decrypt[0]).unwrap();
+        assert_eq!(final_point2, point);
     }
 }

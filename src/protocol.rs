@@ -1,98 +1,85 @@
 //! Mental poker protocol state machine.
 //!
-//! The protocol progresses through phases, each requiring specific actions
-//! from specific players. `valid_actions()` returns what's currently expected,
-//! making it easy to fuzz test by randomly picking valid actions.
+//! Two-phase shuffle+lock protocol:
+//! 1. Shuffle: each player encrypts all cards with one key, shuffles.
+//! 2. Lock: each player removes their shuffle key, re-encrypts with per-position keys.
+//! 3. Deal: players reveal per-position lock scalars. Verifiable by anyone.
+//!
+//! `valid_actions()` returns what's currently expected — for fuzz testing,
+//! randomly pick valid actions.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::crypto::{self, Point, Scalar};
 use crate::game::{BetAction, GameState, PlayerId, Street};
 
-/// The phase of the mental poker protocol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
-    /// Waiting for players to join.
     WaitingForPlayers { need: usize },
-    /// Players commit their RNG seeds (hashed).
     CommitSeeds,
-    /// Players reveal their RNG seeds.
     RevealSeeds,
     /// Players take turns encrypting and shuffling the deck.
     Shuffle { next_player: PlayerId },
-    /// Sequential decryption for dealing a card.
-    /// Each player (except the recipient for hole cards) decrypts in turn.
+    /// Players take turns removing shuffle encryption and adding per-position lock keys.
+    Lock { next_player: PlayerId },
+    /// Players reveal per-position lock scalars to deal a card.
     Dealing {
-        /// What kind of card is being dealt.
         deal_type: DealType,
-        /// Deck position of the card being dealt.
         deck_position: usize,
-        /// The current partially-decrypted point.
-        current_point: Point,
-        /// Which player should decrypt next.
-        next_decryptor: PlayerId,
-        /// How many players have decrypted so far.
-        decryptions_done: usize,
-        /// How many decryptions are needed.
-        decryptions_needed: usize,
     },
-    /// Betting round.
     Betting,
-    /// Players reveal hole cards for showdown.
     Showdown,
-    /// Hand is complete.
     Complete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DealType {
-    /// Dealing hole card `card_idx` (0 or 1) to `for_player`.
     HoleCard {
         for_player: PlayerId,
         card_idx: usize,
     },
-    /// Dealing a community card.
     CommunityCard {
-        /// Total community cards to deal in this street (3 for flop, 1 for turn/river).
         remaining_this_street: usize,
     },
 }
 
-/// An action that can be taken in the current protocol state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
-    /// Join the game.
     Join { player_id: PlayerId },
-    /// Commit a hashed RNG seed.
     CommitSeed {
         player_id: PlayerId,
         commitment: [u8; crypto::HASH_BYTES],
     },
-    /// Reveal the RNG seed (must match prior commitment).
     RevealSeed {
         player_id: PlayerId,
         seed: Vec<u8>,
     },
-    /// Encrypt all cards with per-position keys and shuffle.
+    /// Shuffle phase: encrypt all cards with shuffle key and shuffle.
     ShuffleDeck {
         player_id: PlayerId,
         deck: Vec<Point>,
     },
-    /// Provide the result of decrypting a card (sends the decrypted point, not the key).
-    DecryptCard {
+    /// Lock phase: remove shuffle encryption, apply per-position lock keys.
+    LockDeck {
+        player_id: PlayerId,
+        deck: Vec<Point>,
+    },
+    /// Reveal a per-position lock scalar for dealing.
+    RevealLockKey {
         player_id: PlayerId,
         deck_position: usize,
-        result: Point,
+        scalar: Scalar,
     },
-    /// Betting action.
     Bet {
         player_id: PlayerId,
         action: BetAction,
     },
-    /// Reveal hole cards at showdown (reveal decryption scalar for verification).
+    /// Reveal lock keys for hole card positions at showdown.
     RevealHand {
         player_id: PlayerId,
-        scalar: Scalar,
+        /// Lock scalars for this player's hole card positions.
+        scalars: Vec<(usize, Scalar)>,
     },
 }
 
@@ -103,14 +90,14 @@ impl Action {
             | Action::CommitSeed { player_id, .. }
             | Action::RevealSeed { player_id, .. }
             | Action::ShuffleDeck { player_id, .. }
-            | Action::DecryptCard { player_id, .. }
+            | Action::LockDeck { player_id, .. }
+            | Action::RevealLockKey { player_id, .. }
             | Action::Bet { player_id, .. }
             | Action::RevealHand { player_id, .. } => *player_id,
         }
     }
 }
 
-/// Description of what actions are currently valid. Used for validation and fuzz testing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidAction {
     pub player_id: PlayerId,
@@ -123,14 +110,13 @@ pub enum ValidActionKind {
     CommitSeed,
     RevealSeed,
     ShuffleDeck,
-    /// Decrypt card at this deck position.
-    DecryptCard { deck_position: usize },
-    /// Valid betting actions for this player.
+    LockDeck,
+    /// Reveal lock key for this deck position.
+    RevealLockKey { deck_position: usize },
     Bet { options: Vec<BetAction> },
     RevealHand,
 }
 
-/// The full protocol state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolState {
     pub phase: Phase,
@@ -138,14 +124,15 @@ pub struct ProtocolState {
     pub seed_commitments: Vec<Option<[u8; crypto::HASH_BYTES]>>,
     pub seeds_revealed: Vec<Option<Vec<u8>>>,
     pub combined_seed: Option<[u8; crypto::HASH_BYTES]>,
-    /// Track which players have shuffled.
     pub shuffles_done: usize,
-    /// Track which players have revealed their hands at showdown.
+    pub locks_done: usize,
     pub showdown_revealed: Vec<bool>,
-    /// Next deck position to deal from.
     pub next_deck_position: usize,
-    /// Track hole card dealing progress: (player, card_idx) for next hole card.
     hole_deal_queue: Vec<(PlayerId, usize)>,
+    /// Track which players have revealed their lock key for the current deal.
+    pub deal_reveals: HashMap<PlayerId, Scalar>,
+    /// For each player, the deck positions of their hole cards.
+    pub hole_card_positions: Vec<Vec<usize>>,
 }
 
 impl ProtocolState {
@@ -157,13 +144,15 @@ impl ProtocolState {
             seeds_revealed: vec![None; num_players],
             combined_seed: None,
             shuffles_done: 0,
+            locks_done: 0,
             showdown_revealed: vec![false; num_players],
             next_deck_position: 0,
             hole_deal_queue: Vec::new(),
+            deal_reveals: HashMap::new(),
+            hole_card_positions: vec![Vec::new(); num_players],
         }
     }
 
-    /// Apply an action to advance the protocol state.
     pub fn apply(&mut self, action: &Action) -> crate::Result<()> {
         match (&self.phase, action) {
             // --- Join ---
@@ -234,8 +223,8 @@ impl ProtocolState {
                 self.shuffles_done += 1;
 
                 if self.shuffles_done >= self.game.num_players() {
-                    self.game.post_blinds();
-                    self.start_dealing_hole_cards();
+                    // All players shuffled — move to lock phase
+                    self.phase = Phase::Lock { next_player: 0 };
                 } else {
                     self.phase = Phase::Shuffle {
                         next_player: self.shuffles_done,
@@ -244,51 +233,71 @@ impl ProtocolState {
                 Ok(())
             }
 
-            // --- Decrypt Card ---
+            // --- Lock ---
+            (Phase::Lock { next_player }, Action::LockDeck { player_id, deck }) => {
+                if *player_id != *next_player {
+                    return Err(crate::Error::InvalidAction("not your turn to lock".into()));
+                }
+                if deck.len() != 52 {
+                    return Err(crate::Error::InvalidAction("deck must have 52 cards".into()));
+                }
+                self.game.deck = deck.clone();
+                self.locks_done += 1;
+
+                if self.locks_done >= self.game.num_players() {
+                    // All players locked — post blinds and start dealing
+                    self.game.post_blinds();
+                    self.start_dealing_hole_cards();
+                } else {
+                    self.phase = Phase::Lock {
+                        next_player: self.locks_done,
+                    };
+                }
+                Ok(())
+            }
+
+            // --- Reveal Lock Key (for dealing) ---
             (
                 Phase::Dealing {
                     deal_type,
                     deck_position,
-                    current_point: _,
-                    next_decryptor,
-                    decryptions_done,
-                    decryptions_needed,
                 },
-                Action::DecryptCard {
+                Action::RevealLockKey {
                     player_id,
                     deck_position: action_pos,
-                    result,
+                    scalar,
                 },
             ) => {
-                if *player_id != *next_decryptor {
-                    return Err(crate::Error::InvalidAction(
-                        "not your turn to decrypt".into(),
-                    ));
-                }
                 if *action_pos != *deck_position {
                     return Err(crate::Error::InvalidAction("wrong deck position".into()));
                 }
 
-                // Accept the decrypted point (we trust it for now; ZKP verification later)
-                let new_done = decryptions_done + 1;
-                let needed = *decryptions_needed;
-                let deal_type = deal_type.clone();
-                let pos = *deck_position;
+                // Check this player should be revealing
+                let exclude = match deal_type {
+                    DealType::HoleCard { for_player, .. } => Some(*for_player),
+                    DealType::CommunityCard { .. } => None,
+                };
+                if exclude == Some(*player_id) {
+                    return Err(crate::Error::InvalidAction(
+                        "recipient doesn't reveal for their own card".into(),
+                    ));
+                }
+                if self.deal_reveals.contains_key(player_id) {
+                    return Err(crate::Error::InvalidAction("already revealed".into()));
+                }
 
-                if new_done >= needed {
-                    // Card is fully decrypted (by all required players)
-                    self.finish_dealing_card(&deal_type, result);
-                } else {
-                    // Find next decryptor
-                    let next = self.next_decryptor_after(*player_id, &deal_type);
-                    self.phase = Phase::Dealing {
-                        deal_type,
-                        deck_position: pos,
-                        current_point: result.clone(),
-                        next_decryptor: next,
-                        decryptions_done: new_done,
-                        decryptions_needed: needed,
-                    };
+                self.deal_reveals.insert(*player_id, scalar.clone());
+
+                // Check if we have all needed reveals
+                let reveals_needed = match deal_type {
+                    DealType::HoleCard { .. } => self.game.num_players() - 1,
+                    DealType::CommunityCard { .. } => self.game.num_players(),
+                };
+
+                if self.deal_reveals.len() >= reveals_needed {
+                    let deal_type = deal_type.clone();
+                    let pos = *deck_position;
+                    self.finish_dealing_card(&deal_type, pos);
                 }
                 Ok(())
             }
@@ -313,7 +322,7 @@ impl ProtocolState {
             }
 
             // --- Showdown ---
-            (Phase::Showdown, Action::RevealHand { player_id, scalar }) => {
+            (Phase::Showdown, Action::RevealHand { player_id, scalars }) => {
                 if self.game.players[*player_id].folded {
                     return Err(crate::Error::InvalidAction("folded players don't reveal".into()));
                 }
@@ -321,13 +330,21 @@ impl ProtocolState {
                     return Err(crate::Error::InvalidAction("already revealed".into()));
                 }
 
-                // Decrypt this player's hole cards with their revealed key
-                for i in 0..self.game.players[*player_id].hole_encrypted.len() {
-                    let decrypted = crypto::decrypt(
-                        &self.game.players[*player_id].hole_encrypted[i],
-                        scalar,
-                    )?;
-                    self.game.players[*player_id].hole_points.push(decrypted);
+                // Apply this player's lock keys to their hole cards to fully decrypt
+                for (pos, scalar) in scalars {
+                    // Find which hole card index this position is
+                    if let Some(idx) = self.hole_card_positions[*player_id]
+                        .iter()
+                        .position(|p| p == pos)
+                    {
+                        if idx < self.game.players[*player_id].hole_encrypted.len() {
+                            let decrypted = crypto::decrypt(
+                                &self.game.players[*player_id].hole_encrypted[idx],
+                                scalar,
+                            )?;
+                            self.game.players[*player_id].hole_points.push(decrypted);
+                        }
+                    }
                 }
 
                 self.showdown_revealed[*player_id] = true;
@@ -354,7 +371,6 @@ impl ProtocolState {
         }
     }
 
-    /// Returns all actions that are valid in the current state.
     pub fn valid_actions(&self) -> Vec<ValidAction> {
         match &self.phase {
             Phase::WaitingForPlayers { need } => (0..self.game.num_players())
@@ -388,16 +404,28 @@ impl ProtocolState {
                 player_id: *next_player,
                 kind: ValidActionKind::ShuffleDeck,
             }],
-            Phase::Dealing {
-                next_decryptor,
-                deck_position,
-                ..
-            } => vec![ValidAction {
-                player_id: *next_decryptor,
-                kind: ValidActionKind::DecryptCard {
-                    deck_position: *deck_position,
-                },
+            Phase::Lock { next_player } => vec![ValidAction {
+                player_id: *next_player,
+                kind: ValidActionKind::LockDeck,
             }],
+            Phase::Dealing {
+                deal_type,
+                deck_position,
+            } => {
+                let exclude = match deal_type {
+                    DealType::HoleCard { for_player, .. } => Some(*for_player),
+                    DealType::CommunityCard { .. } => None,
+                };
+                (0..self.game.num_players())
+                    .filter(|pid| exclude != Some(*pid) && !self.deal_reveals.contains_key(pid))
+                    .map(|pid| ValidAction {
+                        player_id: pid,
+                        kind: ValidActionKind::RevealLockKey {
+                            deck_position: *deck_position,
+                        },
+                    })
+                    .collect()
+            }
             Phase::Betting => {
                 if let Some(pid) = self.game.action_on {
                     vec![ValidAction {
@@ -453,7 +481,6 @@ impl ProtocolState {
         actions
     }
 
-    /// Build the hole card dealing queue: round-robin, left of button, 2 rounds.
     fn start_dealing_hole_cards(&mut self) {
         let n = self.game.num_players();
         let first_seat = (self.game.button + 1) % n;
@@ -470,39 +497,37 @@ impl ProtocolState {
         self.start_next_deal();
     }
 
-    /// Start dealing the next card (hole or community).
     fn start_next_deal(&mut self) {
         if let Some((for_player, card_idx)) = self.hole_deal_queue.first().cloned() {
             let pos = self.next_deck_position;
-            let n = self.game.num_players();
-            // For hole cards, everyone EXCEPT the recipient decrypts
-            let decryptions_needed = n - 1;
-            let first_decryptor = self.first_decryptor_excluding(Some(for_player));
+            self.deal_reveals.clear();
+            self.hole_card_positions[for_player].push(pos);
             self.phase = Phase::Dealing {
                 deal_type: DealType::HoleCard { for_player, card_idx },
                 deck_position: pos,
-                current_point: self.game.deck[pos].clone(),
-                next_decryptor: first_decryptor,
-                decryptions_done: 0,
-                decryptions_needed,
             };
         }
-        // If queue is empty, caller handles transition
     }
 
-    /// Called when a card has been fully decrypted by all required players.
-    fn finish_dealing_card(&mut self, deal_type: &DealType, final_point: &Point) {
+    /// Called when all required lock keys have been revealed for a card.
+    fn finish_dealing_card(&mut self, deal_type: &DealType, deck_position: usize) {
+        // Apply all revealed lock scalars to the deck point to get partially-decrypted point
+        let mut point = self.game.deck[deck_position].clone();
+        for scalar in self.deal_reveals.values() {
+            point = crypto::decrypt(&point, scalar).unwrap();
+        }
+
         match deal_type {
             DealType::HoleCard { for_player, .. } => {
-                // Store the partially-decrypted point — recipient still needs to apply their key
+                // Point still has the recipient's lock key on it — they decrypt locally
                 self.game.players[*for_player]
                     .hole_encrypted
-                    .push(final_point.clone());
+                    .push(point);
                 self.next_deck_position += 1;
+                self.deal_reveals.clear();
                 self.hole_deal_queue.remove(0);
 
                 if self.hole_deal_queue.is_empty() {
-                    // All hole cards dealt
                     self.start_betting_or_skip();
                 } else {
                     self.start_next_deal();
@@ -511,56 +536,25 @@ impl ProtocolState {
             DealType::CommunityCard {
                 remaining_this_street,
             } => {
-                self.game.community.push(final_point.clone());
+                // All players revealed — point is fully decrypted
+                self.game.community.push(point);
                 self.next_deck_position += 1;
+                self.deal_reveals.clear();
                 let remaining = remaining_this_street - 1;
 
                 if remaining == 0 {
-                    // Done dealing community cards for this street
                     self.start_betting_or_skip();
                 } else {
-                    // Deal next community card
                     let pos = self.next_deck_position;
-                    let n = self.game.num_players();
                     self.phase = Phase::Dealing {
                         deal_type: DealType::CommunityCard {
                             remaining_this_street: remaining,
                         },
                         deck_position: pos,
-                        current_point: self.game.deck[pos].clone(),
-                        next_decryptor: 0,
-                        decryptions_done: 0,
-                        decryptions_needed: n,
                     };
                 }
             }
         }
-    }
-
-    /// Find the first player who should decrypt, optionally excluding one player.
-    fn first_decryptor_excluding(&self, exclude: Option<PlayerId>) -> PlayerId {
-        for i in 0..self.game.num_players() {
-            if exclude != Some(i) {
-                return i;
-            }
-        }
-        0
-    }
-
-    /// Find the next player who should decrypt after `current`, respecting exclusions.
-    fn next_decryptor_after(&self, current: PlayerId, deal_type: &DealType) -> PlayerId {
-        let exclude = match deal_type {
-            DealType::HoleCard { for_player, .. } => Some(*for_player),
-            DealType::CommunityCard { .. } => None,
-        };
-        let n = self.game.num_players();
-        for offset in 1..n {
-            let pid = (current + offset) % n;
-            if exclude != Some(pid) {
-                return pid;
-            }
-        }
-        current
     }
 
     fn start_betting_or_skip(&mut self) {
@@ -596,16 +590,12 @@ impl ProtocolState {
 
     fn start_community_deal(&mut self, num_cards: usize) {
         let pos = self.next_deck_position;
-        let n = self.game.num_players();
+        self.deal_reveals.clear();
         self.phase = Phase::Dealing {
             deal_type: DealType::CommunityCard {
                 remaining_this_street: num_cards,
             },
             deck_position: pos,
-            current_point: self.game.deck[pos].clone(),
-            next_decryptor: 0,
-            decryptions_done: 0,
-            decryptions_needed: n,
         };
     }
 }

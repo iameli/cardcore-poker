@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(timeout 5 cargo run --bin poker)",
+      "Bash(git add:*)"
+    ]
+  }
+}
