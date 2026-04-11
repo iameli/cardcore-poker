@@ -1,0 +1,41 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.table",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Establishes a poker table. First record in any hand. All players must agree on this before the hand begins.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["players", "startingChips", "smallBlind", "createdAt"],
+        "properties": {
+          "players": {
+            "type": "array",
+            "description": "Player DIDs in seat order.",
+            "minLength": 2,
+            "maxLength": 10,
+            "items": {
+              "type": "string",
+              "format": "did"
+            }
+          },
+          "startingChips": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Starting chip count for each player."
+          },
+          "smallBlind": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Small blind amount. Big blind is 2x."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.lockDeck",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Remove shuffle encryption and apply per-position lock keys. Each player creates one, in seat order.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["table", "deck", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef"
+          },
+          "deck": {
+            "type": "array",
+            "description": "52 locked Ristretto255 points.",
+            "minLength": 52,
+            "maxLength": 52,
+            "items": {
+              "type": "bytes",
+              "maxLength": 32
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

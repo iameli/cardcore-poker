@@ -11,6 +11,9 @@ rand = "0.9"
 rand_chacha = "0.9"
 base64 = "0.22"
 thiserror = "2"
+jacquard-common = "0.11"
+jacquard-derive = "0.11"
+jacquard-lexicon = "0.11"
 
 [dev-dependencies]
 rand = "0.9"

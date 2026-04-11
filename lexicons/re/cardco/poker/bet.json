@@ -1,0 +1,35 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.bet",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A betting action: fold, check, call, raise, or all-in.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["table", "action", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef"
+          },
+          "action": {
+            "type": "string",
+            "knownValues": ["fold", "check", "call", "allIn"],
+            "description": "The betting action. For raises, use 'raise' with the amount field."
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Raise amount (total, not incremental). Only present for raises."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

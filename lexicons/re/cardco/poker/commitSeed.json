@@ -1,0 +1,31 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.commitSeed",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Commit a hashed seed for later verification. Each player creates one per hand.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["table", "commitment", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Reference to the table record for this hand."
+          },
+          "commitment": {
+            "type": "bytes",
+            "maxLength": 32,
+            "description": "BLAKE2b hash of the player's secret seed."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.poker.shuffleDeck",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Encrypt all cards with shuffle key and permute. Each player creates one, in seat order.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["table", "deck", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef"
+          },
+          "deck": {
+            "type": "array",
+            "description": "52 encrypted Ristretto255 points, base64-encoded.",
+            "minLength": 52,
+            "maxLength": 52,
+            "items": {
+              "type": "bytes",
+              "maxLength": 32
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}
