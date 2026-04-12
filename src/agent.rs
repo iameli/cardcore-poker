@@ -436,9 +436,20 @@ impl PlayerAgent {
                 Ok(Action::Bet { player_id, action })
             }
             ActionAction::RevealHand(rh) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::RevealHand)
-                })?;
+                // Match by deck positions — each player has unique hole card positions
+                let reveal_positions: Vec<usize> = rh.reveals.iter()
+                    .map(|ps| ps.deck_position as usize)
+                    .collect();
+                let player_id = self.state.hole_card_positions
+                    .iter()
+                    .enumerate()
+                    .find(|(i, positions)| {
+                        *positions == &reveal_positions && !self.state.showdown_revealed[*i]
+                    })
+                    .map(|(i, _)| i)
+                    .ok_or_else(|| crate::Error::InvalidAction(
+                        "reveal positions don't match any player".into()
+                    ))?;
                 let scalars: Vec<(usize, Scalar)> = rh
                     .reveals
                     .iter()
@@ -451,12 +462,23 @@ impl PlayerAgent {
                 Ok(Action::RevealHand { player_id, scalars })
             }
             ActionAction::VerifySeed(vs) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::VerifySeed)
-                })?;
+                // Match this seed to a player by checking against commitments
+                let seed_bytes = vs.seed.to_vec();
+                let hash = crypto::blake2b(&seed_bytes)?;
+                let player_id = self.state.seed_commitments
+                    .iter()
+                    .enumerate()
+                    .find(|(i, c)| {
+                        c.map_or(false, |commitment| commitment == hash)
+                            && !self.state.seeds_verified[*i]
+                    })
+                    .map(|(i, _)| i)
+                    .ok_or_else(|| crate::Error::InvalidAction(
+                        "seed doesn't match any unverified commitment".into()
+                    ))?;
                 Ok(Action::VerifySeed {
                     player_id,
-                    seed: vs.seed.to_vec(),
+                    seed: seed_bytes,
                 })
             }
             _ => Err(crate::Error::Protocol("unknown action type".into())),

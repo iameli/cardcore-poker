@@ -10,6 +10,7 @@ pub mod eval;
 pub mod game;
 pub mod lexicon;
 pub mod protocol;
+pub mod sim;
 
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;

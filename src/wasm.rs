@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::agent::{AgentOutput, PlayerAgent};
 use crate::game::BetAction;
+use crate::sim::{BotStrategy, SimConfig, Simulator};
 
 #[wasm_bindgen]
 pub struct WasmAgent {
@@ -123,6 +124,34 @@ impl WasmAgent {
             .map(to_wasm_output)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
+}
+
+/// Simulate a complete game and return events as JSON.
+#[wasm_bindgen]
+pub fn simulate_game(
+    num_players: usize,
+    starting_chips: u64,
+    small_blind: u64,
+    strategy: &str,
+    rng_seed: u64,
+) -> Result<String, JsValue> {
+    let strategy = match strategy {
+        "random" => BotStrategy::Random,
+        _ => BotStrategy::Passive,
+    };
+    let config = SimConfig {
+        num_players,
+        starting_chips,
+        small_blind,
+        strategy,
+        rng_seed,
+    };
+    let mut sim = Simulator::new(config)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    sim.run()
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    serde_json::to_string(sim.events())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 fn parse_bet_action(s: &str) -> Result<BetAction, String> {

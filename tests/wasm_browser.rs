@@ -171,7 +171,7 @@ fn two_agents_full_hand_in_browser() {
 }
 
 #[wasm_bindgen_test]
-#[ignore] // TODO: 3-player relay needs more careful action ordering
+#[ignore] // 3-player relay works natively (sim tests) but this test's relay logic needs updating
 fn three_player_hand_in_browser() {
     let dids = ["did:plc:a", "did:plc:b", "did:plc:c"];
     let mut agents: Vec<PlayerAgent> = dids
@@ -286,6 +286,31 @@ fn three_player_hand_in_browser() {
             panic!("agent not complete: {:?}", a.phase());
         }
     }
+}
+
+#[wasm_bindgen_test]
+fn simulator_runs_in_browser() {
+    use cardcore_poker::sim::{BotStrategy, GameEvent, SimConfig, Simulator};
+
+    let config = SimConfig {
+        num_players: 3,
+        starting_chips: 1000,
+        small_blind: 10,
+        strategy: BotStrategy::Passive,
+        rng_seed: 77,
+    };
+    let mut sim = Simulator::new(config).unwrap();
+    sim.run().unwrap();
+
+    let events = sim.events();
+    assert!(events.iter().any(|e| matches!(e, GameEvent::TableCreated { .. })));
+    assert!(events.iter().any(|e| matches!(e, GameEvent::HoleCardsDealt { .. })));
+    assert!(events.iter().any(|e| matches!(e, GameEvent::CommunityDealt { street, .. } if street == "flop")));
+    assert!(events.iter().any(|e| matches!(e, GameEvent::SeedsVerified)));
+
+    // Verify JSON serialization works in WASM too
+    let json = serde_json::to_string(events).unwrap();
+    assert!(json.contains("tableCreated"));
 }
 
 fn passive_bet(options: &[BetAction]) -> BetAction {
