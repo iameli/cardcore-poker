@@ -9,16 +9,24 @@
     "test:headed": "playwright test --headed"
   },
   "dependencies": {
+    "@atproto/api": "^0.19.8",
+    "@ipld/car": "^5.4.3",
+    "@ipld/dag-cbor": "^9.2.6",
+    "cbor-x": "^1.6.4",
+    "multiformats": "^13.4.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
     "playwright": "^1.59.1",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vite": "^8.0.8"
   }
