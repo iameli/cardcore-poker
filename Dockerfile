@@ -12,13 +12,21 @@ RUN apt-get update && apt-get install -y \
 
 # Install matching chromedriver
 RUN CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+') \
-    && CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1) \
     && wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip \
     && unzip /tmp/chromedriver.zip -d /tmp \
     && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
     && chmod +x /usr/local/bin/chromedriver \
     && rm -rf /tmp/chromedriver* \
     && chromedriver --version
+
+# Node.js + pnpm for web frontend, multiplayer test, and dev-env
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g pnpm@9 \
+    && node --version && pnpm --version
+
+# Playwright browser for web frontend tests
+RUN npx playwright install --with-deps chromium
 
 # WASM target + wasm-pack
 RUN rustup target add wasm32-unknown-unknown \
@@ -27,8 +35,17 @@ RUN rustup target add wasm32-unknown-unknown \
 WORKDIR /app
 COPY . .
 
-# Pre-fetch dependencies
-RUN cargo fetch
+# Install JS dependencies and pre-fetch Rust deps
+RUN pnpm install --frozen-lockfile && cargo fetch
 
-# Run all tests: native + WASM browser
-CMD ["sh", "-c", "cargo test --release && wasm-pack test --headless --chrome --release"]
+# Build WASM (both web and node targets)
+RUN wasm-pack build --target web --release \
+    && wasm-pack build --target nodejs --release --out-dir pkg-node
+
+# Run all tests: native Rust + WASM browser + web frontend + multiplayer
+CMD ["sh", "-c", "\
+    echo '=== Native Rust tests ===' && cargo test --release && \
+    echo '=== WASM browser tests ===' && wasm-pack test --headless --chrome --release && \
+    echo '=== Web frontend tests ===' && pnpm --filter @cardcore/web test && \
+    echo '=== Multiplayer test ===' && npx tsx multiplayer-test.ts \
+"]

@@ -1,18 +1,65 @@
 /**
  * Multiplayer test: 4 players over a real AT Protocol PDS.
  *
- * Usage: PDS_URL=http://localhost:36607 npx tsx multiplayer-test.ts
+ * Boots its own PDS via the dev-env package, or uses PDS_URL if set.
+ *
+ * Usage: npx tsx multiplayer-test.ts
+ *    or: PDS_URL=http://localhost:36607 npx tsx multiplayer-test.ts
  */
 
 import { AtpAgent } from "@atproto/api";
 import WebSocket from "ws";
 import { decode as cborDecode, encode as cborEncode, decodeMultiple } from "cbor-x";
+import { spawn } from "child_process";
 
 const wasmModule = require("./pkg-node/cardcore_poker.js");
 
-const PDS_URL = process.env.PDS_URL || "http://localhost:36607";
 const NUM_PLAYERS = 4;
 const TABLE_RKEY = `t${Date.now() % 100000}`;
+
+/** Boot a local PDS via dev-env, or use PDS_URL if already set. */
+async function getPdsUrl(): Promise<{ url: string; cleanup: () => void }> {
+  if (process.env.PDS_URL) {
+    console.log(`Using existing PDS: ${process.env.PDS_URL}`);
+    return { url: process.env.PDS_URL, cleanup: () => {} };
+  }
+
+  console.log("Booting local PDS...");
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", ["packages/dev-env/run.mjs"], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+
+    let output = "";
+    child.stdout!.on("data", (data: Buffer) => {
+      output += data.toString();
+      // Look for the JSON line with pds-url
+      const lines = output.split("\n");
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line.trim());
+          if (parsed["pds-url"]) {
+            console.log(`PDS started: ${parsed["pds-url"]}`);
+            resolve({
+              url: parsed["pds-url"],
+              cleanup: () => child.kill(),
+            });
+            return;
+          }
+        } catch {}
+      }
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code !== null && code !== 0) {
+        reject(new Error(`dev-env exited with code ${code}`));
+      }
+    });
+
+    setTimeout(() => reject(new Error("dev-env boot timeout")), 30000);
+  });
+}
 
 interface Player {
   handle: string;
@@ -29,7 +76,8 @@ const seqTracker = new Map<string, number>();
 const actionLog: { did: string; rkey: string; cbor: Uint8Array }[] = [];
 
 async function main() {
-  console.log(`Multiplayer: ${NUM_PLAYERS} players on ${PDS_URL}\n`);
+  const { url: PDS_URL, cleanup: cleanupPds } = await getPdsUrl();
+  console.log(`\nMultiplayer: ${NUM_PLAYERS} players on ${PDS_URL}\n`);
 
   // Register accounts
   const players: Player[] = [];
@@ -176,6 +224,7 @@ async function main() {
   console.log(`  Actions: ${actionStore.size} records written to PDS`);
 
   for (const p of players) p.wasmAgent.free();
+  cleanupPds();
   console.log("\nMultiplayer test PASSED!");
   process.exit(0);
 }
@@ -227,4 +276,7 @@ function pickBet(options: any[]): string {
   return hasCheck ? "check" : "fold";
 }
 
-main().catch(e => { console.error("Fatal:", e.message || e); process.exit(1); });
+main().catch(e => {
+  console.error("Fatal:", e.message || e);
+  process.exit(1);
+});
