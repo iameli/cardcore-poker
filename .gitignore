@@ -2,7 +2,6 @@
 *.ndjson
 pkg/
 chromedriver/
-web/pkg/
-web/dist/
-web/node_modules/
-web/test-results/
+node_modules/
+dist/
+test-results/
