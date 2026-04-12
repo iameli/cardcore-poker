@@ -1,6 +1,7 @@
 /target
 *.ndjson
 pkg/
+pkg-node/
 chromedriver/
 node_modules/
 dist/

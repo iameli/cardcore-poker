@@ -10,6 +10,10 @@ build-release:
 build-wasm:
     wasm-pack build --target web --release
 
+# Build WASM for Node.js (multiplayer test)
+build-wasm-node:
+    wasm-pack build --target nodejs --release --out-dir pkg-node
+
 # Run native tests
 test:
     cargo test --release
@@ -21,12 +25,12 @@ test-wasm:
 # Run Playwright browser tests for the web frontend
 test-web: build-wasm
     pnpm install
-    pnpm test
+    pnpm --filter @cardcore/web test
 
 # Run the dev server
 dev: build-wasm
     pnpm install
-    pnpm exec vite
+    pnpm --filter @cardcore/web dev
 
 # Run all tests (native + WASM + web)
 test-all: test test-wasm test-web
@@ -34,6 +38,11 @@ test-all: test test-wasm test-web
 # Run the text-based CLI
 play:
     cargo run --bin poker
+
+# Run multiplayer test (requires a running PDS)
+test-multiplayer: build-wasm-node
+    pnpm install
+    pnpm run test:multiplayer
 
 # Regenerate lexicon types from JSON schemas
 lexgen:

@@ -27,7 +27,7 @@ export function useSimulation(config: {
 
     async function run() {
       try {
-        const wasm = await import("../pkg/cardcore_poker.js");
+        const wasm = await import("../../../pkg/cardcore_poker.js");
         await wasm.default();
 
         const json = wasm.simulate_game(

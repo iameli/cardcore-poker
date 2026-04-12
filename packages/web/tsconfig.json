@@ -9,10 +9,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
-    "declaration": true,
     "paths": {
       "react-native": ["./node_modules/react-native-web"]
     }
   },
-  "include": ["web-src", "web-tests"]
+  "include": ["src", "tests"]
 }

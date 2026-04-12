@@ -1,12 +1,9 @@
 {
-  "name": "cardcore-poker-web",
+  "name": "cardcore-poker",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:multiplayer": "tsx multiplayer-test.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.19.8",
@@ -14,20 +11,11 @@
     "@ipld/dag-cbor": "^9.2.6",
     "cbor-x": "^1.6.4",
     "multiformats": "^13.4.2",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "react-native-web": "^0.21.2",
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-react": "^6.0.1",
-    "playwright": "^1.59.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2",
-    "vite": "^8.0.8"
+    "typescript": "^6.0.2"
   }
 }
