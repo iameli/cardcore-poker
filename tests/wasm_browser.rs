@@ -308,9 +308,61 @@ fn simulator_runs_in_browser() {
     assert!(events.iter().any(|e| matches!(e, GameEvent::CommunityDealt { street, .. } if street == "flop")));
     assert!(events.iter().any(|e| matches!(e, GameEvent::SeedsVerified)));
 
-    // Verify JSON serialization works in WASM too
     let json = serde_json::to_string(events).unwrap();
     assert!(json.contains("tableCreated"));
+}
+
+/// Test the wasm-bindgen simulate_game() entry point — the actual JS-facing API.
+#[wasm_bindgen_test]
+fn simulate_game_wasm_api() {
+    use cardcore_poker::wasm::simulate_game;
+
+    // 2-player passive game
+    let json = simulate_game(2, 1000, 10, "passive", 42).unwrap();
+    let events: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+
+    assert!(!events.is_empty(), "should produce events");
+
+    // Check expected event types are present
+    let types: Vec<&str> = events.iter()
+        .filter_map(|e| e.get("type").and_then(|t| t.as_str()))
+        .collect();
+    assert!(types.contains(&"tableCreated"), "missing tableCreated");
+    assert!(types.contains(&"holeCardsDealt"), "missing holeCardsDealt");
+    assert!(types.contains(&"communityDealt"), "missing communityDealt");
+    assert!(types.contains(&"seedsVerified"), "missing seedsVerified");
+
+    // Verify hole cards are real card strings
+    for event in &events {
+        if event.get("type").and_then(|t| t.as_str()) == Some("holeCardsDealt") {
+            let cards = event.get("cards").unwrap().as_array().unwrap();
+            assert_eq!(cards.len(), 2);
+            for card in cards {
+                let s = card.as_str().unwrap();
+                assert!(s.len() == 2, "card should be 2 chars: {}", s);
+            }
+        }
+    }
+
+    // 3-player random game — should also work
+    let json3 = simulate_game(3, 500, 5, "random", 99).unwrap();
+    let events3: Vec<serde_json::Value> = serde_json::from_str(&json3).unwrap();
+    assert!(!events3.is_empty());
+
+    // Different seeds produce different games
+    let json_a = simulate_game(2, 1000, 10, "passive", 1).unwrap();
+    let json_b = simulate_game(2, 1000, 10, "passive", 2).unwrap();
+    assert_ne!(json_a, json_b, "different seeds should produce different games");
+}
+
+/// Test that the same seed produces the exact same game (deterministic replay).
+#[wasm_bindgen_test]
+fn simulator_deterministic_replay() {
+    use cardcore_poker::wasm::simulate_game;
+
+    let json1 = simulate_game(2, 1000, 10, "passive", 42).unwrap();
+    let json2 = simulate_game(2, 1000, 10, "passive", 42).unwrap();
+    assert_eq!(json1, json2, "same config+seed must produce identical games");
 }
 
 fn passive_bet(options: &[BetAction]) -> BetAction {
