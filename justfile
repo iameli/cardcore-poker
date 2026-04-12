@@ -6,9 +6,9 @@ build:
 build-release:
     cargo build --release
 
-# Build WASM package
+# Build WASM package into web/pkg
 build-wasm:
-    wasm-pack build --target web --release
+    wasm-pack build --target web --release --out-dir web/pkg
 
 # Run native tests
 test:
@@ -18,8 +18,16 @@ test:
 test-wasm:
     wasm-pack test --headless --chrome --release
 
-# Run all tests (native + WASM)
-test-all: test test-wasm
+# Run Playwright browser tests for the web frontend
+test-web: build-wasm
+    cd web && npm test
+
+# Run the dev server
+dev: build-wasm
+    cd web && npm run dev
+
+# Run all tests (native + WASM + web)
+test-all: test test-wasm test-web
 
 # Run the text-based CLI
 play:
