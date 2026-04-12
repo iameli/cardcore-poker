@@ -364,12 +364,7 @@ impl Simulator {
     fn finish_game(&mut self) -> crate::Result<()> {
         self.done = true;
 
-        // Check for win by fold
-        let active: Vec<usize> = (0..self.agents.len())
-            .filter(|_| true) // TODO: check fold status from agent
-            .collect();
-
-        // Emit showdown events
+        // Emit showdown events for players who have full hands
         for i in 0..self.agents.len() {
             let hole = self.agents[i].hole_cards();
             let community = self.agents[i].community_cards();
@@ -382,6 +377,25 @@ impl Simulator {
                     cards: hole.iter().map(|c| c.to_string()).collect(),
                     hand_description: hand.to_string(),
                 });
+            }
+        }
+
+        // Run seed verification — agents auto-emit VerifySeed when in Complete phase
+        for _ in 0..100 {
+            let mut progress = false;
+            for i in 0..self.agents.len() {
+                if let AgentOutput::Actions(actions) = self.agents[i].auto_respond_if_needed()? {
+                    if !actions.is_empty() {
+                        self.broadcast_actions(i, &actions);
+                        progress = true;
+                    }
+                }
+            }
+            if self.drain_queues()? {
+                progress = true;
+            }
+            if !progress {
+                break;
             }
         }
 
@@ -455,6 +469,11 @@ impl Simulator {
         }
     }
 
+    fn next_rng(&mut self) -> u64 {
+        self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.rng >> 33
+    }
+
     fn pick_bet(&mut self, options: &[BetAction]) -> BetAction {
         match self.config.strategy {
             BotStrategy::Passive => {
@@ -465,9 +484,34 @@ impl Simulator {
                 }
             }
             BotStrategy::Random => {
-                self.rng = self.rng.wrapping_mul(6364136223846793005).wrapping_add(1);
-                let idx = (self.rng >> 33) as usize % options.len();
-                options[idx].clone()
+                // Weighted random: prefer action over folding
+                // ~40% check/call, ~30% raise, ~20% all-in, ~10% fold
+                let roll = self.next_rng() % 100;
+                let has_check = options.iter().any(|o| matches!(o, BetAction::Check));
+                let has_call = options.iter().any(|o| matches!(o, BetAction::Call));
+                let has_raise = options.iter().any(|o| matches!(o, BetAction::Raise(_)));
+                let has_allin = options.iter().any(|o| matches!(o, BetAction::AllIn));
+
+                if roll < 40 {
+                    // Check or call
+                    if has_check { BetAction::Check }
+                    else if has_call { BetAction::Call }
+                    else { options[0].clone() }
+                } else if roll < 70 && has_raise {
+                    // Raise — pick the raise option
+                    options.iter().find(|o| matches!(o, BetAction::Raise(_))).unwrap().clone()
+                } else if roll < 90 && has_allin {
+                    BetAction::AllIn
+                } else if roll >= 90 {
+                    // Fold (but not if we can check for free)
+                    if has_check { BetAction::Check }
+                    else { BetAction::Fold }
+                } else {
+                    // Fallback
+                    if has_check { BetAction::Check }
+                    else if has_call { BetAction::Call }
+                    else { options[0].clone() }
+                }
             }
         }
     }

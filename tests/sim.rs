@@ -64,9 +64,10 @@ fn simulate_random_strategy() {
         };
         let mut sim = Simulator::new(config).unwrap();
         sim.run().unwrap();
+        // Seeds should always be verified, even if the game ended by fold
         assert!(sim.events().iter().any(|e|
-            matches!(e, GameEvent::SeedsVerified | GameEvent::WinByFold { .. })
-        ), "seed={}: game should end with verification or fold win", seed);
+            matches!(e, GameEvent::SeedsVerified)
+        ), "seed={}: seeds should always be verified", seed);
     }
 }
 

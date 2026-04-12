@@ -87,10 +87,9 @@ test.describe("Cardcore Poker", () => {
 
     const logText = await page.getByTestId("event-log").textContent();
 
-    // Should contain key phases
+    // Should contain key phases — seeds are always verified even on fold wins
     expect(logText).toContain("Table:");
     expect(logText).toContain("dealt");
-    expect(logText).toContain("flop:");
     expect(logText).toContain("Seeds verified");
   });
 });

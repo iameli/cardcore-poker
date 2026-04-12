@@ -14,7 +14,7 @@ export function App() {
     numPlayers,
     startingChips: 1000,
     smallBlind: 10,
-    strategy: "passive",
+    strategy: "random",
     rngSeed: seed,
   });
 
