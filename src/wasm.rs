@@ -125,7 +125,6 @@ impl WasmAgent {
         serde_json::to_string(&cards).unwrap_or_default()
     }
 
-
     /// Get the current protocol phase.
     /// Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Dealing", "Betting", "Showdown", "Complete"
     pub fn phase(&self) -> String {

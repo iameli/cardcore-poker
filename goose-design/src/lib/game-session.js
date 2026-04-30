@@ -80,6 +80,9 @@ export class PlayerSession {
 
   /** Get community cards as parsed objects. */
   get communityCards() {
+    const raw = this.agent.community_cards();
+    console.log('[PlayerSession] communityCards raw:', raw);
+
     try {
       const raw = this.agent.community_cards();
       if (!raw || raw === '[]') return [];
