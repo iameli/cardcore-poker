@@ -294,6 +294,7 @@
     // Update hole cards (indexed by our player ID)
     if (holeRaw.length > 0) {
       decryptedHoleCards = { [ourPlayerId]: holeRaw };
+      _hadCards = true;
     }
     decryptedCommunityCards = commRaw;
 
@@ -314,7 +315,7 @@
         return { type: 'raise', label: String(opt) };
       });
       raiseContext = { min: 2, max: 1000, pot: gameState?.pot || 0, quickAmounts: [] };
-    } else if (holeRaw.length === 0 && commRaw.length === 0 && prevPhase !== 'init' && !wasmSession.needsBet && gameState.phase !== 'idle') {
+    } else if (_hadCards && holeRaw.length === 0 && commRaw.length === 0 && !wasmSession.needsBet && gameState.phase !== 'idle') {
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
