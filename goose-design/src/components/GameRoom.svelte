@@ -145,7 +145,7 @@
         send: (cbor) => {
           // Broadcast CBOR action via WebSocket
           roomClient.sendAction({
-            type: 'wasm_table',
+            type: 'wasm_action',
             cbor: uint8ToBase64(cbor),
           });
         },
