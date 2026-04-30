@@ -380,12 +380,26 @@
     else if (commLen >= 4) gameState = { ...gameState, phase: GAME_PHASES.TURN };
     else if (commLen >= 3) gameState = { ...gameState, phase: GAME_PHASES.FLOP };
     else if (wasmSession.phase === 'betting') gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
-    // Hand complete: had cards, now no bets needed, not already restarting
-    if (wasmSession.isComplete && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
-      _restarting = true;
-      _hadCards = false;
-      addLog('Hand complete — dealing new hand...');
-      setTimeout(() => { restartHand(); _restarting = false; }, 2000);
+    // Hand complete — announce winner and restart
+    if (wasmSession.isComplete && !_restarting) {
+      const gs2 = wasmSession.gameState;
+      if (gs2 && gameState) {
+        // Find winner: player who didn't fold
+        let winnerId = null;
+        for (const pid of gameState.playerOrder) {
+          const p = gameState.players[pid];
+          if (p && !p.folded) { winnerId = pid; break; }
+        }
+        if (winnerId) {
+          const winnerName = gameState.players[winnerId]?.name || winnerId;
+          addLog(winnerName + ' wins ' + (gs2.pot || gameState.pot) + ' chips!');
+        }
+      }
+      if (ourPlayerId === (gameState?.playerOrder || [''])[0]) {
+        _restarting = true;
+        _hadCards = false;
+        setTimeout(() => { restartHand(); _restarting = false; }, 2000);
+      }
     }
   }
 
