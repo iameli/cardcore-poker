@@ -109,7 +109,6 @@
     }
 
     return () => {
-      if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
       roomClient.destroy();
       _wired = false;
     };
@@ -144,7 +143,6 @@
     // Generate our seed and create session
     if (!_seed) _seed = generateSeed();
     localStorage.setItem('cardcore_seed_' + roomId, Array.from(_seed).join(','));
-    if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
       // Use DID if available, otherwise our playerId
       const ourPlayer = players.find(p => p.id === ourPlayerId); const did = ourPlayer?.did || session?.did || ourPlayerId;
       wasmSession = new PlayerSession({
@@ -230,6 +228,7 @@
     if (!wasmSession) return;
 
     if (action.type === 'wasm_table') {
+      if (gameState && gameState.phase === 'idle') {        initWasmGame(Object.values(gameState.players));      }
       // Table record — feed via receiveTable (not receiveAction)
       try {
         const cbor = base64ToUint8Array(action.cbor);
@@ -304,6 +303,19 @@
         return { type: 'raise', label: String(opt) };
       });
       raiseContext = { min: 2, max: 1000, pot: gameState?.pot || 0, quickAmounts: [] };
+    } else if (holeRaw.length === 0 && commRaw.length === 0 && gameState.phase !== 'idle') {
+      isOurTurn = false;
+      availableActions = [];
+      raiseContext = null;
+      addLog('Hand complete!');
+      const dealerId = gameState.playerOrder[0];
+      if (ourPlayerId === dealerId) {
+        addLog('Starting new hand as dealer...');
+        setTimeout(() => restartHand(), 1500);
+      } else {
+        addLog('Waiting for dealer to start new hand...');
+        gameState = { ...gameState, phase: 'idle' };
+      }
     } else {
       isOurTurn = false;
       availableActions = [];
@@ -347,6 +359,13 @@
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────
+
+  function restartHand() {
+    if (!gameState) return;
+    const players = Object.values(gameState.players);
+    initWasmGame(players);
+  }
+
   function uint8ToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';
@@ -366,7 +385,6 @@
   }
 
   function leave() {
-    if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
     roomClient.leave();
     onLeaveRoom();
   }</script>
