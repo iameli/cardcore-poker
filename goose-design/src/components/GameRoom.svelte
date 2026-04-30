@@ -327,6 +327,7 @@
     if (wasmSession.needsBet) {
       isOurTurn = true;
       const opts = wasmSession.betOptions || [];
+      console.log('[BET-OPTS]', JSON.stringify(opts));
       availableActions = opts.map(opt => {
         if (typeof opt === 'string') return { type: opt, label: opt.toUpperCase() };
         if (opt === 'Fold') return { type: 'fold', label: 'FOLD' };
