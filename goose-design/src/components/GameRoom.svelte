@@ -320,6 +320,21 @@
     }
     decryptedCommunityCards = commRaw;
 
+    // Sync chips/pot from WASM before betting check
+    const gs = wasmSession.gameState;
+    if (gs && gameState) {
+      gameState.pot = gs.pot;
+      gameState.currentBet = gs.currentBet;
+      if (gs.players) for (const p of gs.players) {
+        const pid = gameState.playerOrder[p.seat];
+        if (pid && gameState.players[pid]) {
+          gameState.players[pid].chips = p.chips;
+          gameState.players[pid].bet = p.bet;
+          gameState.players[pid].folded = p.folded;
+        }
+      }
+    }
+
     // Save phase before checkStatus overwrites it
     const prevPhase = wasmSession.phase;
     // Check betting status
@@ -357,6 +372,9 @@
 
 
     // Derive game phase from community card count
+
+    }
+
     const commLen = (wasmSession.communityCards || []).length;
     if (commLen >= 5) gameState = { ...gameState, phase: GAME_PHASES.RIVER };
     else if (commLen >= 4) gameState = { ...gameState, phase: GAME_PHASES.TURN };
