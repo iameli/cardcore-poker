@@ -32,7 +32,6 @@
   let availableActions = $state([]);
   let raiseContext = $state(null);
   let isOurTurn = $state(false);
-  let _pendingActions = [];
 
   // ─── Derived ──────────────────────────────────────────────────────
   const ourPlayerId = $derived(playerId);
@@ -146,8 +145,8 @@
         send: (cbor) => {
           // Broadcast CBOR action via WebSocket
           roomClient.sendAction({
-            type: 'wasm_action',
-            cbor: arrayBufferToBase64(cbor.buffer || cbor),
+            type: 'wasm_table',
+            cbor: uint8ToBase64(cbor),
           });
         },
       });
@@ -189,12 +188,11 @@
       });
       // Broadcast table CBOR to all players
       roomClient.sendAction({
-        type: 'wasm_action',
-        cbor: arrayBufferToBase64(tableCbor.buffer),
+        type: 'wasm_table',
+        cbor: uint8ToBase64(tableCbor),
       });
       // Feed to our session
       const actions = wasmSession.receiveTable(tableCbor);
-      _pendingActions = actions;
       addLog('Table record broadcast. Agents processing...');
       refreshGameView();
     }
@@ -203,7 +201,18 @@
   function receiveRemoteAction(fromPlayerId, action) {
     if (!wasmSession) return;
 
-    if (action.type === 'wasm_action') {
+    if (action.type === 'wasm_table') {
+      // Table record — feed via receiveTable (not receiveAction)
+      try {
+        const cbor = base64ToUint8Array(action.cbor);
+        const out = wasmSession.receiveTable(cbor);
+        addLog(`Table received from ${fromPlayerId}, produced ${out.length} action(s)`);
+        refreshGameView();
+      } catch (e) {
+        console.error('Failed to process WASM table:', e);
+      }
+    } else if (action.type === 'wasm_action') {
+      // Action record — feed via receiveAction
       try {
         const cbor = base64ToUint8Array(action.cbor);
         const out = wasmSession.receiveAction(cbor);
@@ -310,7 +319,7 @@
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────
-  function arrayBufferToBase64(buffer) {
+  function uint8ToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
