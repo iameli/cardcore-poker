@@ -354,6 +354,14 @@
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
         refreshGameView();
+        // After betting, if we have cards but no bet needed, hand is over
+        if (_hadCards && !wasmSession.needsBet && wasmSession.holeCards.length > 0) {
+          addLog('Hand complete!');
+          _hadCards = false;
+          if (ourPlayerId === gameState.playerOrder[0]) {
+            availableActions = [{ type: 'new_hand', label: 'DEAL NEW HAND' }];
+          }
+        }
       } catch (e) {
         console.error('Bet failed:', e);
         error = 'Action failed: ' + e.message;
