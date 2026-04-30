@@ -373,7 +373,7 @@
 
     // Derive game phase from community card count
 
-    }
+
 
     const commLen = (wasmSession.communityCards || []).length;
     if (commLen >= 5) gameState = { ...gameState, phase: GAME_PHASES.RIVER };
