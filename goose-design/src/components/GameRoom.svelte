@@ -327,8 +327,8 @@
       allIn: 'allIn',
     };
 
-    let betStr = betMap[action.type];
-    if (action.type === 'raise') {
+    let betStr = betMap[action.type] || (typeof action.type === "string" ? action.type.toLowerCase() : null);
+    if (action.type === 'raise' || action.type === 'Raise') {
       betStr = `raise:${action.amount || gameState?.bigBlind || 2}`;
     }
 
