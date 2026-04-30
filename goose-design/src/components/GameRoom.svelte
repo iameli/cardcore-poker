@@ -337,7 +337,8 @@
         // Raise option
         return { type: 'raise', label: String(opt) };
       });
-      raiseContext = { min: 2, max: 1000, pot: gameState?.pot || 0, quickAmounts: [] };
+      const ourChips = (gameState?.players || {})[ourPlayerId]?.chips ?? 1000;
+      raiseContext = { min: 2, max: ourChips, pot: gameState?.pot || 0, quickAmounts: [] };
     } else if (_hadCards && holeRaw.length === 0 && commRaw.length === 0 && !wasmSession.needsBet && gameState.phase !== 'idle') {
       isOurTurn = false;
       availableActions = [];
@@ -354,23 +355,7 @@
       raiseContext = null;
     }
 
-    // Sync game state from WASM agent
-    const gs = wasmSession.gameState;
-    if (gs && gameState) {
-      gameState = { ...gameState, pot: gs.pot, currentBet: gs.currentBet };
-      if (gs.players) {
-        const newPlayers = { ...gameState.players };
-        for (const p of gs.players) {
-          const pid = gameState.playerOrder[p.seat];
-          if (pid && newPlayers[pid]) {
-            newPlayers[pid] = { ...newPlayers[pid], chips: p.chips, bet: p.bet, folded: p.folded };
-          }
-        }
-        gameState = { ...gameState, players: newPlayers };
-      }
-    }
 
-    // Update phase in gameState
     // Derive game phase from community card count
     const commLen = (wasmSession.communityCards || []).length;
     if (commLen >= 5) gameState = { ...gameState, phase: GAME_PHASES.RIVER };
