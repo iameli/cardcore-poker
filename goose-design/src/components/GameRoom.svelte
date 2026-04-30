@@ -167,7 +167,9 @@
     const isDealer = ourPlayerId === playerIds[0];
 
     // Generate our seed and create session
-    if (!_seed) _seed = generateSeed();
+    if (_restarting || !localStorage.getItem('cardcore_seed_' + roomId)) {
+      _seed = generateSeed();
+    }
     localStorage.setItem('cardcore_seed_' + roomId, Array.from(_seed).join(','));
     if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
     _hadCards = false;
