@@ -38,6 +38,7 @@ wss.on("connection", (ws) => {
             players: [],
             spectators: [],
             gameState: null,
+            actionHistory: [],
             createdAt: Date.now(),
           });
           console.log(`[ROOM] Created room ${roomId}`);
@@ -52,6 +53,15 @@ wss.on("connection", (ws) => {
           console.log(
             `[JOIN] ${playerName} (${playerId}) reconnected to room ${roomId}`,
           );
+          // Send game state sync if game is active
+          if (room.gameActive && room.actionHistory.length > 0) {
+            console.log(`[SYNC] Sending game state to reconnected ${playerName}`);
+            ws.send(JSON.stringify({
+              type: "game_state_sync",
+              players: room.gamePlayers,
+              history: room.actionHistory,
+            }));
+          }
         } else {
           const autoSeat = room.players.length;
           room.players.push({
@@ -111,12 +121,12 @@ wss.on("connection", (ws) => {
           room: sanitizeRoom(room),
         });
 
-        // Check if all players are ready
         if (room.players.length >= 2 && room.players.every((p) => p.ready)) {
           console.log(
             `[GAME] All players ready in room ${roomId}, starting game!`,
           );
           room.gameActive = true;
+          room.actionHistory = [];
           room.gamePlayers = room.players.map((p) => ({
             id: p.id,
             name: p.name,
@@ -135,6 +145,10 @@ wss.on("connection", (ws) => {
         console.log(
           `[ACTION] ${playerName} (${playerId}) action: ${msg.action?.type || JSON.stringify(msg.action)}`,
         );
+        const room = rooms.get(roomId);
+        if (room && msg.action && (msg.action.type === "wasm_table" || msg.action.type === "wasm_action")) {
+          room.actionHistory.push({ playerId, action: msg.action });
+        }
         broadcastRoom(
           roomId,
           {
@@ -158,6 +172,7 @@ wss.on("connection", (ws) => {
             players: [],
             spectators: [],
             gameState: null,
+            actionHistory: [],
             createdAt: Date.now(),
           });
           console.log(`[ROOM] Created room ${roomId} (via spectate)`);
@@ -186,20 +201,19 @@ wss.on("connection", (ws) => {
         ws.playerId = playerId;
         ws.isSpectator = true;
 
-        // Send current room state to the spectator
         ws.send(JSON.stringify({
           type: "room_update",
           room: sanitizeRoom(room),
         }));
 
-        // If a game is already in progress, send game_start so spectator can sync
         if (room.gameActive && room.gamePlayers) {
           console.log(
-            `[SPECTATE] Game in progress in room ${roomId}, sending game_start to spectator ${playerName}`,
+            `[SPECTATE] Game in progress, sending game_state_sync to ${playerName}`,
           );
           ws.send(JSON.stringify({
-            type: "game_start",
+            type: "game_state_sync",
             players: room.gamePlayers,
+            history: room.actionHistory || [],
           }));
         }
         break;
@@ -227,11 +241,9 @@ wss.on("connection", (ws) => {
 function leaveRoom(ws) {
   const rid = ws.roomId;
   const pid = ws.playerId;
-  // Quiet no-op: WebSocket opened but join never processed (HMR, rapid reconnect)
   if (!rid || !rooms.has(rid)) return;
   const room = rooms.get(rid);
 
-  // Check if this is a spectator leaving
   if (ws.isSpectator) {
     const leavingSpectator = room.spectators.find((s) => s.id === pid);
     if (!leavingSpectator) return;
@@ -239,7 +251,6 @@ function leaveRoom(ws) {
     room.spectators = room.spectators.filter((s) => s.id !== pid);
     if (room.players.length === 0 && room.spectators.length === 0) {
       rooms.delete(rid);
-      console.log(`[LEAVE] Room ${rid} deleted (no players or spectators left)`);
     }
     return;
   }
@@ -250,7 +261,6 @@ function leaveRoom(ws) {
   room.players = room.players.filter((p) => p.id !== pid);
   if (room.players.length === 0 && room.spectators.length === 0) {
     rooms.delete(rid);
-    console.log(`[LEAVE] Room ${rid} deleted (no players or spectators left)`);
   } else {
     broadcastRoom(rid, {
       type: "room_update",
@@ -261,10 +271,7 @@ function leaveRoom(ws) {
 
 function broadcastRoom(roomId, msg, excludePlayerId = null) {
   const room = rooms.get(roomId);
-  if (!room) {
-    console.log(`[BROADCAST] Room ${roomId} not found!`);
-    return;
-  }
+  if (!room) return;
   const data = JSON.stringify(msg);
   let sentCount = 0;
   for (const player of room.players) {
@@ -273,7 +280,6 @@ function broadcastRoom(roomId, msg, excludePlayerId = null) {
       sentCount++;
     }
   }
-  // Also send to the sender for confirmation
   if (excludePlayerId) {
     const sender = room.players.find((p) => p.id === excludePlayerId);
     if (sender && sender.ws.readyState === 1) {
@@ -281,14 +287,12 @@ function broadcastRoom(roomId, msg, excludePlayerId = null) {
       sentCount++;
     }
   }
-  // Broadcast to spectators too
   for (const spectator of room.spectators) {
     if (spectator.ws.readyState === 1) {
       spectator.ws.send(data);
       sentCount++;
     }
   }
-  console.log(`[BROADCAST] Sent ${msg.type} to ${sentCount} clients in room ${roomId}`);
 }
 
 function sanitizeRoom(room) {
@@ -306,7 +310,6 @@ function sanitizeRoom(room) {
   };
 }
 
-// API endpoint for room list
 app.get("/api/rooms", (req, res) => {
   const roomList = [];
   for (const [id, room] of rooms) {
@@ -321,7 +324,6 @@ app.get("/api/rooms", (req, res) => {
   res.json(roomList);
 });
 
-// Create room endpoint
 app.post("/api/rooms", express.json(), (req, res) => {
   const roomId = uuidv4().slice(0, 8);
   rooms.set(roomId, {
@@ -329,12 +331,12 @@ app.post("/api/rooms", express.json(), (req, res) => {
     players: [],
     spectators: [],
     gameState: null,
+    actionHistory: [],
     createdAt: Date.now(),
   });
   res.json({ roomId });
 });
 
-// Store AT Protocol URI for a room
 app.put("/api/rooms/:roomId/atp", express.json(), (req, res) => {
   const { roomId } = req.params;
   const room = rooms.get(roomId);

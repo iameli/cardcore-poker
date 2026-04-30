@@ -60,6 +60,8 @@
 
   onMount(async () => {
     await initWasm();
+    const savedSeed = localStorage.getItem('cardcore_seed_' + roomId);
+    if (savedSeed) _seed = new Uint8Array(savedSeed.split(',').map(Number));
 
     const pid = ensurePlayerId();
     const pName = session?.handle || session?.name || 'Player';
@@ -92,6 +94,11 @@
       roomClient.on('game_start', (data) => {
         addLog('Game starting!');
         initWasmGame(data.players);
+      });
+
+      roomClient.on('game_state_sync', (data) => {
+        addLog('Rejoining active game...');
+        replayGameState(data.players, data.history);
       });
 
       roomClient.on('game_action', (data) => {
@@ -136,6 +143,7 @@
 
     // Generate our seed and create session
     if (!_seed) _seed = generateSeed();
+    localStorage.setItem('cardcore_seed_' + roomId, Array.from(_seed).join(','));
     if (!wasmSession) {
       // Use DID if available, otherwise our playerId
       const ourPlayer = players.find(p => p.id === ourPlayerId); const did = ourPlayer?.did || session?.did || ourPlayerId;
@@ -196,6 +204,27 @@
       addLog('Table record broadcast. Agents processing...');
       refreshGameView();
     }
+  }
+
+
+  function replayGameState(players, history) {
+    if (!history || history.length === 0) return;
+    initWasmGame(players);
+    if (!wasmSession) return;
+    addLog(`Replaying ${history.length} action(s)...`);
+    for (const entry of history) {
+      try {
+        if (entry.action.type === "wasm_table") {
+          wasmSession.receiveTable(base64ToUint8Array(entry.action.cbor));
+        } else if (entry.action.type === "wasm_action") {
+          wasmSession.receiveAction(base64ToUint8Array(entry.action.cbor));
+        }
+      } catch (e) {
+        console.warn("Replay error:", e.message);
+      }
+    }
+    refreshGameView();
+    addLog("Rejoined game!");
   }
 
   function receiveRemoteAction(fromPlayerId, action) {
