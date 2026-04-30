@@ -1,6 +1,8 @@
 <script>
+  import { onMount } from 'svelte';
   import { ATPublisher, buildTableRecord } from '../lib/atproto-publisher.js';
   import { initWasm } from '../lib/cardcore-wasm.js';
+  import { fetchProfile } from '../lib/atproto.js';
 
   let { session, onJoinRoom, onSpectateRoom, onSignOut } = $props();
 
@@ -10,6 +12,18 @@
   let error = $state('');
   let loaded = $state(false);
   let atpRoomUri = $state(null);
+  let userAvatar = $state(null);
+
+  onMount(() => {
+    if (session?.session) {
+      const did = session.did;
+      if (did) {
+        fetchProfile(did).then(profile => {
+          if (profile?.avatar) userAvatar = profile.avatar;
+        });
+      }
+    }
+  });
 
   $effect(() => {
     initWasm().catch(() => {});
@@ -91,7 +105,11 @@
 <div class="lobby">
   <header>
     <div class="user-info">
-      <span class="dot"></span>
+      {#if userAvatar}
+        <div class="avatar-circle">
+          <img src={userAvatar} alt="avatar" />
+        </div>
+      {/if}
       <span class="name">{playerName}</span>
     </div>
     <button class="btn logout" onclick={onSignOut}>Leave</button>
@@ -176,11 +194,20 @@
     align-items: center;
     gap: 0.5rem;
   }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 0;
-    background: #1a1a1a;
+  .avatar-circle {
+    width: 28px;
+    height: 28px;
+    border: 2px solid #1a1a1a;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  .avatar-circle img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   .name {
     font-size: 0.5rem;

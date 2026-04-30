@@ -131,12 +131,12 @@ export async function signIn(handle) {
 }
 
 /**
- * Resolve a DID to a handle via the public Bluesky API.
+ * Resolve a DID (or handle) to a handle via Slingshot's cached identity resolver.
  */
 export async function resolveDidToHandle(did) {
   try {
     const res = await fetch(
-      `https://public.api.bsky.app/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did)}`,
+      `https://slingshot.microcosm.blue/xrpc/blue.microcosm.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
     );
     if (res.ok) {
       const data = await res.json();

@@ -6,6 +6,7 @@
     players = [],
     playerOrder = [],
     playerDids = {},
+    handleMap = {},
     holeCards = {},
     communityCards = [],
     pot = 0,
@@ -37,10 +38,13 @@
     const entry = seatMap[i];
     const pid = entry?.id || null;
     const p = entry?.player || null;
+    const did = pid ? (playerDids[pid] || p?.did || null) : null;
+    const handle = did ? (handleMap[did] || null) : null;
+    const displayPlayer = p ? { ...p, name: handle || p.name } : null;
     return {
       id: pid,
-      player: p,
-      did: pid ? (playerDids[pid] || p?.did || null) : null,
+      player: displayPlayer,
+      did,
       hole: pid ? (holeCards[pid] || []) : [],
       spriteRow: SPRITE_ROWS[position] ?? 0,
     };

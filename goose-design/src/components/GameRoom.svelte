@@ -87,8 +87,9 @@
       });
     }
 
-    // Resolve handles for all players when room updates
+    // Resolve handles for all players when room updates (real sessions only)
     const resolveAllHandles = async () => {
+      if (!session?.session) return;
       const dids = (room?.players || []).map(p => p.did).filter(Boolean);
       if (dids.length === 0) return;
       const map = await resolveHandles(dids);
@@ -432,9 +433,14 @@
 <div class="game-room">
   <header>
     <div class="room-header">
-      <span class="room-badge">Room: {roomId}</span>
+      {#if userAvatar}
+        <div class="avatar-circle">
+          <img src={userAvatar} alt="avatar" />
+        </div>
+      {/if}
+      <span class="handle-name">{playerName}</span>
       <span class="connection {connected ? 'online' : 'offline'}">
-        {connected ? '● Connected' : '○ Disconnected'}
+        {connected ? '●' : '○'}
       </span>
     </div>
     <div class="header-actions">
@@ -530,6 +536,7 @@
             players={playerMap}
             playerOrder={playerOrder}
             playerDids={playerDids}
+            handleMap={handleMap}
             holeCards={decryptedHoleCards}
             communityCards={decryptedCommunityCards}
             pot={gameState.pot}
@@ -587,10 +594,25 @@
   .room-header {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.6rem;
   }
-  .room-badge {
-    font-size: 0.45rem;
+  .avatar-circle {
+    width: 28px;
+    height: 28px;
+    border: 2px solid #1a1a1a;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  .avatar-circle img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .handle-name {
+    font-size: 0.5rem;
     color: #1a1a1a;
   }
   .connection {
