@@ -243,8 +243,9 @@
     if (!wasmSession) return;
 
     if (action.type === 'wasm_table') {
-      if (gameState && gameState.phase === 'idle') {        initWasmGame(Object.values(gameState.players));      }
-      // Table record — feed via receiveTable (not receiveAction)
+      if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
+      _hadCards = false;
+      initWasmGame(Object.values(gameState.players));
       try {
         const cbor = base64ToUint8Array(action.cbor);
         const out = wasmSession.receiveTable(cbor);
