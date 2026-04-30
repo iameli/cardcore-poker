@@ -163,7 +163,7 @@
   async function initWasmGame(players) {
     if (spectating || !players || players.length < 2) return;
 
-    const playerIds = players.map(p => p.id);
+    const playerIds = players.slice().sort((a, b) => a.seat - b.seat).map(p => p.id);
     const isDealer = ourPlayerId === playerIds[0];
 
     // Generate our seed and create session

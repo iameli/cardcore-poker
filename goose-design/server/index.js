@@ -63,17 +63,17 @@ wss.on("connection", (ws) => {
             }));
           }
         } else {
-          const autoSeat = room.players.length;
-          room.players.push({
-            id: playerId,
-            name: playerName,
-            did: playerDid,
-            ws,
-            seat: autoSeat,
-          });
-          console.log(
-            `[JOIN] ${playerName} (${playerId}) joined room ${roomId} at auto-seat ${autoSeat}. Total players: ${room.players.length}`,
-          );
+          if (room.gameActive) {
+            if (!room.pendingPlayers) room.pendingPlayers = [];
+            room.pendingPlayers.push({ id: playerId, name: playerName, did: playerDid, ws });
+            ws.isPending = true;
+            console.log("[JOIN] " + playerName + " (" + playerId + ") queued for next hand in room " + roomId);
+            ws.send(JSON.stringify({ type: "game_state_sync", players: room.gamePlayers, history: room.actionHistory }));
+          } else {
+            const autoSeat = room.players.length;
+            room.players.push({ id: playerId, name: playerName, did: playerDid, ws, seat: autoSeat });
+            console.log("[JOIN] " + playerName + " (" + playerId + ") joined room " + roomId + " at auto-seat " + autoSeat + ". Total players: " + room.players.length);
+          }
         }
 
         ws.roomId = roomId;
@@ -127,6 +127,13 @@ wss.on("connection", (ws) => {
           );
           room.gameActive = true;
           room.actionHistory = [];
+          if (room.pendingPlayers && room.pendingPlayers.length > 0) {
+            for (const pp of room.pendingPlayers) {
+              pp.seat = room.players.length;
+              room.players.push(pp);
+            }
+            room.pendingPlayers = [];
+          }
           room.gamePlayers = room.players.map((p) => ({
             id: p.id,
             name: p.name,
@@ -244,6 +251,10 @@ function leaveRoom(ws) {
   if (!rid || !rooms.has(rid)) return;
   const room = rooms.get(rid);
 
+  if (ws.isPending) {
+    if (room.pendingPlayers) room.pendingPlayers = room.pendingPlayers.filter(p => p.id !== pid);
+    return;
+  }
   if (ws.isSpectator) {
     const leavingSpectator = room.spectators.find((s) => s.id === pid);
     if (!leavingSpectator) return;
@@ -256,8 +267,14 @@ function leaveRoom(ws) {
   }
 
   const leavingPlayer = room.players.find((p) => p.id === pid);
-  if (!leavingPlayer) return;
-  console.log(`[LEAVE] ${leavingPlayer?.name || 'Unknown'} (${pid}) removed from room ${rid}`);
+  if (!leavingPlayer) {
+    if (room.pendingPlayers) room.pendingPlayers = room.pendingPlayers.filter(p => p.id !== pid);
+    return;
+  }
+  console.log('[LEAVE] ' + (leavingPlayer?.name || 'Unknown') + ' (' + pid + ') removed from room ' + rid);
+  if (room.gameActive) {
+    broadcastRoom(rid, { type: 'game_action', playerId: pid, action: { type: 'wasm_action', cbor: 'omUkdHlwZXgYcmUuY2FyZGNvLnBva2VyLmRlZnMjYmV0ZmFjdGlvbmRmb2xk' } }, pid);
+  }
   room.players = room.players.filter((p) => p.id !== pid);
   if (room.players.length === 0 && room.spectators.length === 0) {
     rooms.delete(rid);
