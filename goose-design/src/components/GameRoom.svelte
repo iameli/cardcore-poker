@@ -6,6 +6,7 @@
   import { roomClient } from '../lib/room.js';
   import { PlayerSession, buildTableCbor, generateSeed } from '../lib/game-session.js';
   import { initWasm } from '../lib/cardcore-wasm.js';
+  import { ATPublisher } from '../lib/atproto-publisher.js';
   import {
     evaluateHand,
     compareHands,
@@ -197,6 +198,14 @@
         cbor: uint8ToBase64(tableCbor),
       });
       // Feed to our session
+      // Publish table to AT Protocol (best effort)
+      if (session?.session?.fetchHandler) {
+        try {
+          const publisher = new ATPublisher({ handler: session.session.fetchHandler, did: session.did });
+          const result = await publisher.createTable({ players: dids, startingChips: 1000, smallBlind: 10 });
+          addLog('Table saved to AT Protocol: ' + result.uri);
+        } catch (e) { console.warn('AT Protocol publish failed (non-fatal):', e.message); }
+      }
       const actions = wasmSession.receiveTable(tableCbor);
       addLog('Table record broadcast. Agents processing...');
       refreshGameView();
