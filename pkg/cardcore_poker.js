@@ -53,6 +53,22 @@ export class WasmAgent {
         }
     }
     /**
+     * Get game state as JSON: pot, chips, bets, actionOn, players.
+     * @returns {string}
+     */
+    game_state() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmagent_game_state(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Get hole cards as JSON array of strings (e.g., ["As", "Kh"]).
      * @returns {string}
      */

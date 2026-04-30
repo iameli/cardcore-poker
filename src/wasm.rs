@@ -131,6 +131,11 @@ impl WasmAgent {
         format!("{:?}", self.inner.phase())
     }
 
+    /// Get game state as JSON: pot, chips, bets, actionOn, players.
+    pub fn game_state(&self) -> String {
+        self.inner.game_state_json()
+    }
+
     /// Check if we need a bet decision.
     pub fn check_status(&mut self) -> Result<WasmOutput, JsValue> {
         self.inner

@@ -105,6 +105,13 @@ export class PlayerSession {
   /** Available bet options. */
 
   /** Whether the game is complete (Phase::Complete). */
+
+  /** Get full game state as parsed object. */
+  get gameState() {
+    try { return JSON.parse(this.agent.game_state()); } catch { return null; }
+  }
+
+
   get isComplete() {
     try { return this.agent.phase() === "Complete"; } catch { return false; }
   }

@@ -354,6 +354,22 @@
       raiseContext = null;
     }
 
+    // Sync game state from WASM agent
+    const gs = wasmSession.gameState;
+    if (gs && gameState) {
+      gameState = { ...gameState, pot: gs.pot, currentBet: gs.currentBet };
+      if (gs.players) {
+        const newPlayers = { ...gameState.players };
+        for (const p of gs.players) {
+          const pid = gameState.playerOrder[p.seat];
+          if (pid && newPlayers[pid]) {
+            newPlayers[pid] = { ...newPlayers[pid], chips: p.chips, bet: p.bet, folded: p.folded };
+          }
+        }
+        gameState = { ...gameState, players: newPlayers };
+      }
+    }
+
     // Update phase in gameState
     // Derive game phase from community card count
     const commLen = (wasmSession.communityCards || []).length;

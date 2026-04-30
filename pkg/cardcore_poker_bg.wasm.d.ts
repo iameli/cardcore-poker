@@ -7,6 +7,7 @@ export const simulate_game: (a: number, b: bigint, c: bigint, d: number, e: numb
 export const wasmagent_bet: (a: number, b: number, c: number) => [number, number, number];
 export const wasmagent_check_status: (a: number) => [number, number, number];
 export const wasmagent_community_cards: (a: number) => [number, number];
+export const wasmagent_game_state: (a: number) => [number, number];
 export const wasmagent_hole_cards: (a: number) => [number, number];
 export const wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const wasmagent_phase: (a: number) => [number, number];

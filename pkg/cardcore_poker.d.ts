@@ -17,6 +17,10 @@ export class WasmAgent {
      */
     community_cards(): string;
     /**
+     * Get game state as JSON: pot, chips, bets, actionOn, players.
+     */
+    game_state(): string;
+    /**
      * Get hole cards as JSON array of strings (e.g., ["As", "Kh"]).
      */
     hole_cards(): string;
@@ -76,6 +80,7 @@ export interface InitOutput {
     readonly wasmagent_bet: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_check_status: (a: number) => [number, number, number];
     readonly wasmagent_community_cards: (a: number) => [number, number];
+    readonly wasmagent_game_state: (a: number) => [number, number];
     readonly wasmagent_hole_cards: (a: number) => [number, number];
     readonly wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmagent_phase: (a: number) => [number, number];

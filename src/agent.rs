@@ -170,6 +170,26 @@ impl PlayerAgent {
         &self.state.phase
     }
 
+    /// Get game state as JSON for the frontend.
+    pub fn game_state_json(&self) -> String {
+        let state = &self.state.game;
+        let players: Vec<serde_json::Value> = state.players.iter().enumerate().map(|(i, p)| {
+            serde_json::json!({
+                "seat": i,
+                "chips": p.chips,
+                "bet": p.bet_this_street,
+                "folded": p.folded,
+                "all_in": p.all_in,
+            })
+        }).collect();
+        serde_json::to_string(&serde_json::json!({
+            "pot": state.pot,
+            "currentBet": state.current_bet,
+            "actionOn": state.action_on,
+            "players": players,
+        })).unwrap_or_default()
+    }
+
     /// Try to auto-respond if there are pending non-interactive actions.
     pub fn auto_respond_if_needed(&mut self) -> crate::Result<AgentOutput> {
         self.auto_respond()
