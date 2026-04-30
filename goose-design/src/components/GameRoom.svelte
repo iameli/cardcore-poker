@@ -311,15 +311,12 @@
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
-      addLog('Hand complete!');
-      const dealerId = gameState.playerOrder[0];
-      if (ourPlayerId === dealerId) {
-        addLog('Starting new hand as dealer...');
-        setTimeout(() => restartHand(), 1500);
+      if (ourPlayerId === gameState.playerOrder[0]) {
+        availableActions = [{ type: 'new_hand', label: 'DEAL NEW HAND' }];
       } else {
-        addLog('Waiting for dealer to start new hand...');
-        gameState = { ...gameState, phase: 'idle' };
+        addLog('Hand complete — waiting for dealer...');
       }
+      gameState = { ...gameState, phase: 'idle' };
     } else {
       isOurTurn = false;
       availableActions = [];
@@ -343,6 +340,10 @@
       allIn: 'allIn',
     };
 
+    if (action.type === 'new_hand') {
+      restartHand();
+      return;
+    }
     let betStr = betMap[action.type] || (typeof action.type === "string" ? action.type.toLowerCase() : null);
     if (action.type === 'raise' || action.type === 'Raise') {
       betStr = `raise:${action.amount || gameState?.bigBlind || 2}`;
