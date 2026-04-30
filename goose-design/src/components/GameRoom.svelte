@@ -297,6 +297,8 @@
     }
     decryptedCommunityCards = commRaw;
 
+    // Save phase before checkStatus overwrites it
+    const prevPhase = wasmSession.phase;
     // Check betting status
     const status = wasmSession.checkStatus();
     if (wasmSession.needsBet) {
@@ -312,7 +314,7 @@
         return { type: 'raise', label: String(opt) };
       });
       raiseContext = { min: 2, max: 1000, pot: gameState?.pot || 0, quickAmounts: [] };
-    } else if (holeRaw.length === 0 && commRaw.length === 0 && wasmSession.phase === 'waiting' && gameState.phase !== 'idle') {
+    } else if (holeRaw.length === 0 && commRaw.length === 0 && prevPhase !== 'init' && !wasmSession.needsBet && gameState.phase !== 'idle') {
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
