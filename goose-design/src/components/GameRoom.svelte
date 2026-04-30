@@ -312,7 +312,7 @@
         return { type: 'raise', label: String(opt) };
       });
       raiseContext = { min: 2, max: 1000, pot: gameState?.pot || 0, quickAmounts: [] };
-    } else if (holeRaw.length === 0 && commRaw.length === 0 && gameState.phase !== 'idle') {
+    } else if (holeRaw.length === 0 && commRaw.length === 0 && wasmSession.phase === 'waiting' && gameState.phase !== 'idle') {
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
