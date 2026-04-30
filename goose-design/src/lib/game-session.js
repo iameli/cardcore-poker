@@ -41,12 +41,16 @@ export class PlayerSession {
 
   /** Feed the table record. Returns actions to broadcast. */
   receiveTable(tableCbor) {
+    console.log('[PlayerSession] receiveTable DID=' + this.did.slice(-8));
+
     const output = this.agent.receive_table(tableCbor);
     return this._processOutput(output);
   }
 
   /** Feed an action from another player. Returns actions to broadcast. */
   receiveAction(actionCbor) {
+    console.log('[PlayerSession] receiveAction DID=' + this.did.slice(-8), 'len=' + actionCbor.length);
+
     const output = this.agent.receive_action(actionCbor);
     return this._processOutput(output);
   }
@@ -101,6 +105,8 @@ export class PlayerSession {
   }
 
   _processOutput(output) {
+    console.log('[PlayerSession] output kind=' + output.kind, 'n=' + (output.action_count || 0));
+
     const actions = [];
     if (output.kind === 'actions') {
       for (let i = 0; i < output.action_count; i++) {
