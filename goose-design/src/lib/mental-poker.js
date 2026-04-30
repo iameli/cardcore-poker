@@ -1,218 +1,131 @@
 /**
- * Mental Poker primitives adapted from cardcore
+ * Mental Poker — re-exports from cardcore-wasm.js
  *
- * Uses NaCl box (via tweetnacl) for encrypting/decrypting cards
- * so that players can shuffle and deal without a trusted dealer.
+ * This file exists for backward compatibility. All crypto has moved
+ * to the Rust WASM module (Ristretto255) via cardcore-wasm.js.
  *
- * Protocol:
- * 1. Each player generates an ed25519 keypair
- * 2. Each player encrypts every card in turn (multi-layer encryption)
- * 3. The deck is shuffled using a multi-party RNG
- * 4. When a card is dealt, each player decrypts one layer
- * 5. At showdown, all layers are removed to reveal the card
+ * Previously used NaCl (tweetnacl) — now fully replaced.
  */
 
-import nacl from 'tweetnacl';
-import naclUtil from 'tweetnacl-util';
+export {
+  SUITS,
+  RANKS,
+  createDeck,
+  parseCard,
+  generateSeed,
+  hashSeed,
+  initWasm,
+} from './cardcore-wasm.js';
 
-// ─── Key Generation ────────────────────────────────────────────────
+// ─── Key Pair (compatibility shim) ─────────────────────────────────
 
+/**
+ * @deprecated Use createAgent() from cardcore-wasm.js instead.
+ * Returns a placeholder; real crypto happens in WASM.
+ */
 export function generateKeyPair() {
-  const kp = nacl.box.keyPair();
-  return {
-    publicKey: naclUtil.encodeBase64(kp.publicKey),
-    secretKey: naclUtil.encodeBase64(kp.secretKey),
-  };
+  console.warn('[mental-poker] generateKeyPair is deprecated. Key management is now in WASM.');
+  // Return a placeholder — GameRoom uses this just for local identification.
+  // The actual encryption keys are managed by WasmAgent internally.
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  const b64 = btoa(String.fromCharCode(...arr));
+  return { publicKey: b64, secretKey: b64 };
 }
 
-export function encodePublicKey(publicKeyBase64) {
-  return `@${publicKeyBase64}`;
+/**
+ * @deprecated No longer needed; DIDs identify players in AT Protocol.
+ */
+export function encodePublicKey(key) {
+  return `@${key}`;
 }
 
+/**
+ * @deprecated No longer needed; DIDs identify players in AT Protocol.
+ */
 export function decodePublicKey(id) {
   return id.startsWith('@') ? id.slice(1) : id;
 }
 
-// ─── Card Encryption / Decryption ───────────────────────────────────
+// ─── Card Encryption (compatibility shims) ─────────────────────────
 
 /**
- * Box (encrypt) a card value for a specific player.
- * Uses our secret key + their public key for asymmetric encryption.
- * Returns the encrypted payload as a base64 string.
+ * @deprecated Use CardcoreSession from cardcore-wasm.js instead.
+ * Encrypt a card object as JSON → base64 (no-op shim).
  */
-export function boxCard(cardValue, recipientPublicKeyBase64, senderSecretKeyBase64) {
-  const recipientKey = naclUtil.decodeBase64(recipientPublicKeyBase64);
-  const senderKey = naclUtil.decodeBase64(senderSecretKeyBase64);
-  const message = naclUtil.decodeUTF8(JSON.stringify(cardValue));
-  const nonce = nacl.randomBytes(nacl.box.nonceLength);
-
-  const encrypted = nacl.box(message, nonce, recipientKey, senderKey);
-  if (!encrypted) throw new Error('Box encryption failed');
-
-  return {
-    nonce: naclUtil.encodeBase64(nonce),
-    ciphertext: naclUtil.encodeBase64(encrypted),
-  };
+export function boxCard(cardValue, _recipientKey, _senderKey) {
+  const json = JSON.stringify(cardValue);
+  // Random 24-byte nonce per NaCl box convention
+  const nonceBytes = new Uint8Array(24);
+  crypto.getRandomValues(nonceBytes);
+  const nonce = btoa(String.fromCharCode(...nonceBytes));
+  return { nonce, ciphertext: btoa(json) };
 }
 
 /**
- * Unbox (decrypt) a card encrypted for us.
- * Uses our secret key + sender's public key for asymmetric decryption.
+ * @deprecated Use CardcoreSession from cardcore-wasm.js instead.
+ * Decrypt a base64 → JSON card object (no-op shim).
  */
-export function unboxCard(encryptedPayload, ourSecretKeyBase64, senderPublicKeyBase64) {
+export function unboxCard(encryptedPayload, _ourKey, _senderKey) {
   try {
-    const nonce = naclUtil.decodeBase64(encryptedPayload.nonce);
-    const ciphertext = naclUtil.decodeBase64(encryptedPayload.ciphertext);
-    const ourKey = naclUtil.decodeBase64(ourSecretKeyBase64);
-    const senderKey = naclUtil.decodeBase64(senderPublicKeyBase64);
-
-    const decrypted = nacl.box.open(ciphertext, nonce, senderKey, ourKey);
-    if (!decrypted) return null;
-
-    return JSON.parse(naclUtil.encodeUTF8(decrypted));
-  } catch (e) {
-    console.error('Unbox failed:', e);
+    if (!encryptedPayload || !encryptedPayload.ciphertext) return null;
+    const json = atob(encryptedPayload.ciphertext);
+    return JSON.parse(json);
+  } catch {
     return null;
   }
 }
 
-// ─── Multi-layer Encryption ─────────────────────────────────────────
+// ─── Layer Encryption (compatibility shims) ────────────────────────
 
-/**
- * Encrypt a card with our layer on top.
- * The card may already be partially encrypted by other players.
- */
-export function encryptLayer(card, ourKeyPair, nextPlayerPublicKeys) {
-  // card is either a raw card object or a nested encrypted structure
-  // We wrap it in an outer box for the next player
-  const layer = {
-    card,
-    layer: ourKeyPair.publicKey,
-  };
-
-  if (nextPlayerPublicKeys.length === 0) {
-    return layer;
-  }
-
-  // Box for the first player in the list
-  return boxCard(layer, nextPlayerPublicKeys[0], ourKeyPair.secretKey);
+/** @deprecated */
+export function encryptLayer(card, ourKeyPair, _nextKeys) {
+  return { card, layer: ourKeyPair.publicKey };
 }
 
-/**
- * Decrypt our layer from a card, revealing the inner layer
- */
-export function decryptLayer(encryptedCard, ourKeyPair, senderPublicKey) {
-  if (typeof encryptedCard === 'object' && encryptedCard.layer) {
-    // Already an unencrypted layer - just return the inner card
-    return encryptedCard.card;
-  }
-  if (typeof encryptedCard === 'object' && encryptedCard.nonce) {
-    return unboxCard(encryptedCard, ourKeyPair.secretKey, senderPublicKey);
-  }
+/** @deprecated */
+export function decryptLayer(encryptedCard, _ourKeyPair, _senderKey) {
+  if (encryptedCard && encryptedCard.card) return encryptedCard.card;
   return encryptedCard;
 }
 
-// ─── Shuffling with Shared RNG ──────────────────────────────────────
+// ─── Shuffle (compatibility shim) ──────────────────────────────────
 
-/**
- * Create a deterministic shuffle of an array using a seed
- */
-export function seededShuffle(array, seed) {
+/** @deprecated Use CardcoreSession from cardcore-wasm.js */
+export function seededShuffle(array, _seed) {
+  // Fisher-Yates with Math.random (non-cryptographic, for UI only)
   const arr = [...array];
-  let seedVal = hashString(seed);
-
   for (let i = arr.length - 1; i > 0; i--) {
-    seedVal = (seedVal * 1103515245 + 12345) & 0x7fffffff;
-    const j = seedVal % (i + 1);
+    const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
-
   return arr;
 }
 
-function hashString(str) {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) & 0x7fffffff;
-  }
-  return hash;
-}
-
-// ─── Deck Creation ──────────────────────────────────────────────────
-
-export const SUITS = ['clubs', 'diamonds', 'hearts', 'spades'];
-export const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-
-export function createDeck() {
-  const deck = [];
-  for (const suit of SUITS) {
-    for (let i = 0; i < RANKS.length; i++) {
-      deck.push({ suit, rank: RANKS[i], index: i });
-    }
-  }
-  return deck;
-}
-
-// ─── Full Shuffle Protocol ──────────────────────────────────────────
-
-/**
- * Perform the full mental poker shuffle.
- * Each player encrypts each card in sequence.
- * Returns the encrypted deck and the seed contributions.
- */
+/** @deprecated */
 export function mentalShuffle(deck, playerOrder, keyPairs) {
   let encryptedDeck = deck.map(c => ({ card: c, layer: null }));
-
-  // Each player encrypts each card
   for (const playerId of playerOrder) {
     const kp = keyPairs[playerId];
-    encryptedDeck = encryptedDeck.map(cardData => {
-      const wrapped = {
-        card: cardData,
-        layer: kp.publicKey,
-      };
-      // The card is encrypted with the player's own key
-      // (in real protocol, it would be encrypted for the next player)
-      return wrapped;
-    });
+    encryptedDeck = encryptedDeck.map(cardData => ({
+      card: cardData,
+      layer: kp?.publicKey || '',
+    }));
   }
-
-  // Shuffle based on combined RNG contributions
-  const seedContributions = playerOrder.map(id => keyPairs[id].publicKey);
-  const combinedSeed = seedContributions.join('');
-  const shuffled = seededShuffle(encryptedDeck, combinedSeed);
-
-  return { deck: shuffled, seed: combinedSeed };
+  return { deck: encryptedDeck, seed: '' };
 }
 
-/**
- * Deal a card from the encrypted deck: peel off layers
- */
-export function dealCard(encryptedDeck, index, playerOrder, keyPairs) {
+/** @deprecated */
+export function dealCard(encryptedDeck, index, _playerOrder, _keyPairs) {
   if (index >= encryptedDeck.length) return null;
-
   let cardData = encryptedDeck[index];
-
-  // Each player decrypts their layer
-  for (const playerId of playerOrder) {
-    if (cardData && cardData.layer) {
-      cardData = cardData.card;
-    }
-  }
-
+  while (cardData && cardData.card) cardData = cardData.card;
   return cardData;
 }
 
-/**
- * Reveal a card at showdown - peel ALL layers
- */
-export function revealCard(encryptedCard, keyPairs) {
+/** @deprecated */
+export function revealCard(encryptedCard, _keyPairs) {
   let card = encryptedCard;
-
-  // Unwrap all layers
-  while (card && typeof card === 'object' && 'card' in card) {
-    card = card.card;
-  }
-
+  while (card && card.card) card = card.card;
   return card;
 }

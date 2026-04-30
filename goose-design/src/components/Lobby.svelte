@@ -1,4 +1,7 @@
 <script>
+  import { ATPublisher, buildTableRecord } from '../lib/atproto-publisher.js';
+  import { initWasm } from '../lib/cardcore-wasm.js';
+
   let { session, onJoinRoom, onSpectateRoom, onSignOut } = $props();
 
   let rooms = $state([]);
@@ -6,8 +9,10 @@
   let creating = $state(false);
   let error = $state('');
   let loaded = $state(false);
+  let atpRoomUri = $state(null);
 
   $effect(() => {
+    initWasm().catch(() => {});
     fetchRooms();
     const interval = setInterval(fetchRooms, 5000);
     return () => clearInterval(interval);
@@ -32,6 +37,32 @@
       const res = await fetch('/api/rooms', { method: 'POST' });
       if (res.ok) {
         const { roomId } = await res.json();
+
+        // If we have a real AT Protocol session, publish a table record
+        if (session?.session?.fetchHandler && session?.did) {
+          try {
+            const publisher = new ATPublisher({
+              handler: session.session.fetchHandler,
+              did: session.did,
+            });
+            const result = await publisher.createTable({
+              players: [session.did],
+              startingChips: 1000,
+              smallBlind: 10,
+            });
+            atpRoomUri = result.uri;
+            console.log('[Lobby] Published table record:', result.uri);
+            // Register the AT URI with the room server
+            await fetch(`/api/rooms/${roomId}/atp`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ atpUri: result.uri }),
+            });
+          } catch (e) {
+            console.warn('[Lobby] AT Protocol publish failed (non-fatal):', e.message);
+          }
+        }
+
         onJoinRoom(roomId);
       } else {
         error = 'Failed to create room';

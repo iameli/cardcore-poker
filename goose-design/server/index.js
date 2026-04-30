@@ -334,6 +334,18 @@ app.post("/api/rooms", express.json(), (req, res) => {
   res.json({ roomId });
 });
 
+// Store AT Protocol URI for a room
+app.put("/api/rooms/:roomId/atp", express.json(), (req, res) => {
+  const { roomId } = req.params;
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  room.atpUri = req.body.atpUri;
+  console.log(`[ATP] Room ${roomId} linked to AT Protocol: ${room.atpUri}`);
+  res.json({ ok: true });
+});
+
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
