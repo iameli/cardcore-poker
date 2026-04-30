@@ -354,6 +354,13 @@
     if (wasmSession.phase === 'betting') {
       gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
     }
+    // Hand complete: had cards, now no bets needed, not already restarting
+    if (_hadCards && !wasmSession.needsBet && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
+      _restarting = true;
+      _hadCards = false;
+      addLog('Hand complete — dealing new hand...');
+      setTimeout(() => { restartHand(); _restarting = false; }, 2000);
+    }
   }
 
   // ─── Player Actions ───────────────────────────────────────────────
@@ -381,16 +388,7 @@
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
         refreshGameView();
-        console.log('[FOLD-CHECK] type=' + action.type + ' hadCards=' + _hadCards + ' restarting=' + _restarting + ' dealer=' + (ourPlayerId === (gameState?.playerOrder || [''])[0]));
-        // Auto-restart on fold
-        if (action.type === 'fold' && _hadCards && !_restarting) {
-          _hadCards = false;
-          if (ourPlayerId === gameState.playerOrder[0]) {
-            _restarting = true;
-            addLog('Hand complete — dealing new hand...');
-            setTimeout(() => { restartHand(); _restarting = false; }, 2000);
-          }
-        }
+
         // After betting, if we have cards but no bet needed, hand is over
 
       } catch (e) {
