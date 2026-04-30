@@ -381,6 +381,7 @@
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
         refreshGameView();
+        console.log('[FOLD-CHECK] type=' + action.type + ' hadCards=' + _hadCards + ' restarting=' + _restarting + ' dealer=' + (ourPlayerId === (gameState?.playerOrder || [''])[0]));
         // Auto-restart on fold
         if (action.type === 'fold' && _hadCards && !_restarting) {
           _hadCards = false;
