@@ -29,6 +29,7 @@
   let wasmSession = null;
   let _seed = null;
   let _hadCards = false;
+  let _restarting = false;
   let decryptedHoleCards = $state({});
   let decryptedCommunityCards = $state([]);
   let availableActions = $state([]);
@@ -355,11 +356,13 @@
         wasmSession.bet(betStr);
         refreshGameView();
         // After betting, if we have cards but no bet needed, hand is over
-        if (_hadCards && !wasmSession.needsBet && wasmSession.holeCards.length > 0) {
+        if (_hadCards && !wasmSession.needsBet && wasmSession.holeCards.length > 0 && !_restarting) {
           addLog('Hand complete!');
           _hadCards = false;
           if (ourPlayerId === gameState.playerOrder[0]) {
-            availableActions = [{ type: 'new_hand', label: 'DEAL NEW HAND' }];
+            _restarting = true;
+            addLog('Dealing new hand...');
+            setTimeout(() => { restartHand(); _restarting = false; }, 2000);
           }
         }
       } catch (e) {
