@@ -138,7 +138,7 @@
     if (!_seed) _seed = generateSeed();
     if (!wasmSession) {
       // Use DID if available, otherwise our playerId
-      const did = session?.did || ourPlayerId;
+      const ourPlayer = players.find(p => p.id === ourPlayerId); const did = ourPlayer?.did || session?.did || ourPlayerId;
       wasmSession = new PlayerSession({
         did,
         seed: _seed,
@@ -180,7 +180,7 @@
     if (isDealer) {
       addLog('Dealer: initializing WASM table...');
       // Build table CBOR with DIDs
-      const dids = playerIds.map(id => session?.did || playerDids[id] || id);
+      const dids = players.map(p => p.did || p.id);
       const tableCbor = buildTableCbor({
         players: dids,
         startingChips: 1000,
