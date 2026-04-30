@@ -354,9 +354,12 @@
     }
 
     // Update phase in gameState
-    if (wasmSession.phase === 'betting') {
-      gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
-    }
+    // Derive game phase from community card count
+    const commLen = (wasmSession.communityCards || []).length;
+    if (commLen >= 5) gameState = { ...gameState, phase: GAME_PHASES.RIVER };
+    else if (commLen >= 4) gameState = { ...gameState, phase: GAME_PHASES.TURN };
+    else if (commLen >= 3) gameState = { ...gameState, phase: GAME_PHASES.FLOP };
+    else if (wasmSession.phase === 'betting') gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
     // Hand complete: had cards, now no bets needed, not already restarting
     if (wasmSession.isComplete && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
       _restarting = true;
