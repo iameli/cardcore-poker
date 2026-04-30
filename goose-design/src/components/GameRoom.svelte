@@ -53,7 +53,7 @@
   let _pid = null;
   function ensurePlayerId() {
     if (_pid) return _pid;
-    _pid = `@${session?.handle || session?.name || 'Player'}-${Math.random().toString(36).slice(2, 8)}`;
+    _pid = session?.did ? `@${session.did}` : `@${session?.handle || session?.name || 'Player'}-${Math.random().toString(36).slice(2, 8)}`;
     return _pid;
   }
   let _wired = false;
