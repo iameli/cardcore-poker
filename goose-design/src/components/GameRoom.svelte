@@ -148,6 +148,9 @@
     localStorage.setItem('cardcore_seed_' + roomId, Array.from(_seed).join(','));
     if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
     _hadCards = false;
+    decryptedHoleCards = {};
+    decryptedCommunityCards = [];
+
 
       // Use DID if available, otherwise our playerId
     const ourPlayer = players.find(p => p.id === ourPlayerId); const did = ourPlayer?.did || session?.did || ourPlayerId;
