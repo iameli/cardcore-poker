@@ -28,6 +28,7 @@
   // WASM session
   let wasmSession = null;
   let _seed = null;
+  let _hadCards = false;
   let decryptedHoleCards = $state({});
   let decryptedCommunityCards = $state([]);
   let availableActions = $state([]);
