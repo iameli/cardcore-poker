@@ -133,7 +133,7 @@ export async function signIn(handle) {
 /**
  * Resolve a DID to a handle via the public Bluesky API.
  */
-async function resolveDidToHandle(did) {
+export async function resolveDidToHandle(did) {
   try {
     const res = await fetch(
       `https://public.api.bsky.app/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did)}`,
@@ -146,6 +146,41 @@ async function resolveDidToHandle(did) {
     // best effort
   }
   return '';
+}
+
+/**
+ * Fetch a user's profile (avatar, display name, etc).
+ */
+export async function fetchProfile(did) {
+  try {
+    const res = await fetch(
+      `https://public.api.bsky.app/xrpc/app.bsky.actor.profile.get?actor=${encodeURIComponent(did)}`,
+    );
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        avatar: data.avatar || null,
+        displayName: data.displayName || '',
+        handle: data.handle || '',
+      };
+    }
+  } catch {
+    // best effort
+  }
+  return null;
+}
+
+/**
+ * Batch resolve DIDs to handles. Returns a Map of did → handle.
+ */
+export async function resolveHandles(dids) {
+  const unique = [...new Set(dids.filter(Boolean))];
+  const results = new Map();
+  await Promise.all(unique.map(async (did) => {
+    const handle = await resolveDidToHandle(did);
+    if (handle) results.set(did, handle);
+  }));
+  return results;
 }
 
 /**

@@ -7,6 +7,7 @@
   import { PlayerSession, buildTableCbor, generateSeed } from '../lib/game-session.js';
   import { initWasm } from '../lib/cardcore-wasm.js';
   import { ATPublisher } from '../lib/atproto-publisher.js';
+  import { fetchProfile, resolveHandles } from '../lib/atproto.js';
   import {
     evaluateHand,
     compareHands,
@@ -35,6 +36,10 @@
   let availableActions = $state([]);
   let raiseContext = $state(null);
   let isOurTurn = $state(false);
+
+  // Avatar & handle resolution
+  let userAvatar = $state(null);
+  let handleMap = $state({});
 
   // ─── Derived ──────────────────────────────────────────────────────
   const ourPlayerId = $derived(playerId);
@@ -75,6 +80,21 @@
     addLog('Connecting to room...');
     roomClient.connect(pid, roomId, pName, realDid);
 
+    // Fetch own avatar
+    if (realDid) {
+      fetchProfile(realDid).then(profile => {
+        if (profile?.avatar) userAvatar = profile.avatar;
+      });
+    }
+
+    // Resolve handles for all players when room updates
+    const resolveAllHandles = async () => {
+      const dids = (room?.players || []).map(p => p.did).filter(Boolean);
+      if (dids.length === 0) return;
+      const map = await resolveHandles(dids);
+      handleMap = Object.fromEntries(map);
+    };
+
     if (!_wired) {
       _wired = true;
 
@@ -92,6 +112,7 @@
         room = data.room;
         const our = data.room.players.find(p => p.id === playerId);
         if (our) ourSeat = our.seat;
+        resolveAllHandles();
       });
 
       roomClient.on('game_start', (data) => {
@@ -359,16 +380,17 @@
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
         refreshGameView();
-        // After betting, if we have cards but no bet needed, hand is over
-        if (_hadCards && !wasmSession.needsBet && wasmSession.holeCards.length > 0 && !_restarting) {
-          addLog('Hand complete!');
+        // Auto-restart on fold
+        if (action.type === 'fold' && _hadCards && !_restarting) {
           _hadCards = false;
           if (ourPlayerId === gameState.playerOrder[0]) {
             _restarting = true;
-            addLog('Dealing new hand...');
+            addLog('Hand complete — dealing new hand...');
             setTimeout(() => { restartHand(); _restarting = false; }, 2000);
           }
         }
+        // After betting, if we have cards but no bet needed, hand is over
+
       } catch (e) {
         console.error('Bet failed:', e);
         error = 'Action failed: ' + e.message;
