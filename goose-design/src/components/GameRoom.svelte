@@ -281,12 +281,15 @@
         console.error('Failed to process WASM table:', e);
       }
     } else if (action.type === 'wasm_action') {
-      // Action record — feed via receiveAction
       try {
         const cbor = base64ToUint8Array(action.cbor);
         const out = wasmSession.receiveAction(cbor);
+        // Detect fold: bet action with 'fold' text in CBOR
+        if (action.cbor && action.cbor.includes('Zm9sZA')) {
+          _handOver = true;
+        }
         if (out.length > 0) {
-          addLog(`Processed action from ${fromPlayerId}, produced ${out.length} response(s)`);
+          addLog(`Processed action from ${fromPlayerId}, produced ${out.length} action(s)`);
         }
         refreshGameView();
       } catch (e) {
