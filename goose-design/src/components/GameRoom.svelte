@@ -144,7 +144,7 @@
     // Generate our seed and create session
     if (!_seed) _seed = generateSeed();
     localStorage.setItem('cardcore_seed_' + roomId, Array.from(_seed).join(','));
-    if (!wasmSession) {
+    if (wasmSession) { wasmSession.destroy(); wasmSession = null; }
       // Use DID if available, otherwise our playerId
       const ourPlayer = players.find(p => p.id === ourPlayerId); const did = ourPlayer?.did || session?.did || ourPlayerId;
       wasmSession = new PlayerSession({
@@ -158,7 +158,6 @@
           });
         },
       });
-    }
 
     // Build synthetic gameState from room data
     const playersObj = {};
