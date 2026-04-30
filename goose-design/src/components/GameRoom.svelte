@@ -31,6 +31,7 @@
   let _seed = null;
   let _hadCards = false;
   let _restarting = false;
+  let _handOver = false;
   let decryptedHoleCards = $state({});
   let decryptedCommunityCards = $state([]);
   let availableActions = $state([]);
@@ -355,7 +356,8 @@
       gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
     }
     // Hand complete: had cards, now no bets needed, not already restarting
-    if (_hadCards && !wasmSession.needsBet && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
+    if (_handOver && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
+      _handOver = false;
       _restarting = true;
       _hadCards = false;
       addLog('Hand complete — dealing new hand...');
@@ -387,6 +389,7 @@
       try {
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
+        if (action.type === 'fold') _handOver = true;
         refreshGameView();
 
         // After betting, if we have cards but no bet needed, hand is over
