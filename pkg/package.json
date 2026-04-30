@@ -1,0 +1,15 @@
+{
+  "name": "cardcore-poker",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "cardcore_poker_bg.wasm",
+    "cardcore_poker.js",
+    "cardcore_poker.d.ts"
+  ],
+  "main": "cardcore_poker.js",
+  "types": "cardcore_poker.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
