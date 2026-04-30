@@ -260,19 +260,6 @@
       } catch (e) {
         console.error('Failed to process WASM action:', e);
       }
-    } else if (action.type === 'fold' || action.type === 'check' ||
-               action.type === 'call' || action.type === 'raise' ||
-               action.type === 'allIn') {
-      // Legacy betting action — forward to WASM agent
-      try {
-        const betAction = action.type === 'raise'
-          ? `raise:${action.amount || gameState?.bigBlind || 2}`
-          : action.type === 'allIn' ? 'allIn' : action.type;
-        wasmSession.bet(betAction);
-        refreshGameView();
-      } catch (e) {
-        console.error('Bet action failed:', e);
-      }
     } else if (action.type === 'phase_change') {
       gameState = {
         ...gameState,
@@ -361,8 +348,6 @@
       try {
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
-        // Also broadcast as legacy action for non-WASM clients
-        roomClient.sendAction(action);
         refreshGameView();
       } catch (e) {
         console.error('Bet failed:', e);
