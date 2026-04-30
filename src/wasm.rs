@@ -74,8 +74,7 @@ impl WasmAgent {
     /// Create a new agent with a DID and secret seed.
     #[wasm_bindgen(constructor)]
     pub fn new(did: &str, seed: &[u8]) -> Result<WasmAgent, JsValue> {
-        let inner = PlayerAgent::new(did, seed)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let inner = PlayerAgent::new(did, seed).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(WasmAgent { inner })
     }
 
@@ -97,8 +96,7 @@ impl WasmAgent {
 
     /// Submit a betting decision. action is one of: "fold", "check", "call", "allIn", or "raise:AMOUNT".
     pub fn bet(&mut self, action: &str) -> Result<WasmOutput, JsValue> {
-        let bet = parse_bet_action(action)
-            .map_err(|e| JsValue::from_str(&e))?;
+        let bet = parse_bet_action(action).map_err(|e| JsValue::from_str(&e))?;
         self.inner
             .bet(bet)
             .map(to_wasm_output)
@@ -107,14 +105,31 @@ impl WasmAgent {
 
     /// Get hole cards as JSON array of strings (e.g., ["As", "Kh"]).
     pub fn hole_cards(&self) -> String {
-        let cards: Vec<String> = self.inner.hole_cards().iter().map(|c| c.to_string()).collect();
+        let cards: Vec<String> = self
+            .inner
+            .hole_cards()
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
         serde_json::to_string(&cards).unwrap_or_default()
     }
 
     /// Get community cards as JSON array of strings.
     pub fn community_cards(&self) -> String {
-        let cards: Vec<String> = self.inner.community_cards().iter().map(|c| c.to_string()).collect();
+        let cards: Vec<String> = self
+            .inner
+            .community_cards()
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
         serde_json::to_string(&cards).unwrap_or_default()
+    }
+
+
+    /// Get the current protocol phase.
+    /// Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Dealing", "Betting", "Showdown", "Complete"
+    pub fn phase(&self) -> String {
+        format!("{:?}", self.inner.phase())
     }
 
     /// Check if we need a bet decision.
@@ -146,12 +161,9 @@ pub fn simulate_game(
         strategy,
         rng_seed,
     };
-    let mut sim = Simulator::new(config)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    sim.run()
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    serde_json::to_string(sim.events())
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let mut sim = Simulator::new(config).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    sim.run().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    serde_json::to_string(sim.events()).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 fn parse_bet_action(s: &str) -> Result<BetAction, String> {

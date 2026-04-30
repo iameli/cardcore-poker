@@ -25,6 +25,11 @@ export class WasmAgent {
      */
     constructor(did: string, seed: Uint8Array);
     /**
+     * Get the current protocol phase.
+     * Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Dealing", "Betting", "Showdown", "Complete"
+     */
+    phase(): string;
+    /**
      * Feed a DAG-CBOR action from any player.
      */
     receive_action(cbor: Uint8Array): WasmOutput;
@@ -73,6 +78,7 @@ export interface InitOutput {
     readonly wasmagent_community_cards: (a: number) => [number, number];
     readonly wasmagent_hole_cards: (a: number) => [number, number];
     readonly wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmagent_phase: (a: number) => [number, number];
     readonly wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmoutput_action: (a: number, b: number) => [number, number];

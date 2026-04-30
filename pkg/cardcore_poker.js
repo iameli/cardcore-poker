@@ -87,6 +87,23 @@ export class WasmAgent {
         return this;
     }
     /**
+     * Get the current protocol phase.
+     * Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Dealing", "Betting", "Showdown", "Complete"
+     * @returns {string}
+     */
+    phase() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmagent_phase(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Feed a DAG-CBOR action from any player.
      * @param {Uint8Array} cbor
      * @returns {WasmOutput}

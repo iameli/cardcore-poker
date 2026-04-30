@@ -9,6 +9,7 @@ export const wasmagent_check_status: (a: number) => [number, number, number];
 export const wasmagent_community_cards: (a: number) => [number, number];
 export const wasmagent_hole_cards: (a: number) => [number, number];
 export const wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const wasmagent_phase: (a: number) => [number, number];
 export const wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
 export const wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
 export const wasmoutput_action: (a: number, b: number) => [number, number];

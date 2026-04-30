@@ -284,10 +284,7 @@
       try {
         const cbor = base64ToUint8Array(action.cbor);
         const out = wasmSession.receiveAction(cbor);
-        // Detect fold: bet action with 'fold' text in CBOR
-        if (action.cbor && action.cbor.includes('Zm9sZA')) {
-          _handOver = true;
-        }
+
         if (out.length > 0) {
           addLog(`Processed action from ${fromPlayerId}, produced ${out.length} action(s)`);
         }
@@ -359,8 +356,7 @@
       gameState = { ...gameState, phase: GAME_PHASES.PREFLOP };
     }
     // Hand complete: had cards, now no bets needed, not already restarting
-    if (_handOver && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
-      _handOver = false;
+    if (wasmSession.isComplete && !_restarting && ourPlayerId === (gameState?.playerOrder || [''])[0]) {
       _restarting = true;
       _hadCards = false;
       addLog('Hand complete — dealing new hand...');
@@ -392,7 +388,6 @@
       try {
         addLog(`You ${action.type}${action.amount ? ' ' + action.amount : ''}`);
         wasmSession.bet(betStr);
-        if (action.type === 'fold') _handOver = true;
         refreshGameView();
 
         // After betting, if we have cards but no bet needed, hand is over

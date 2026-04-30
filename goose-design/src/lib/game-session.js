@@ -100,6 +100,13 @@ export class PlayerSession {
   }
 
   /** Available bet options. */
+
+  /** Whether the game is complete (Phase::Complete). */
+  get isComplete() {
+    try { return this.agent.phase() === "Complete"; } catch { return false; }
+  }
+
+
   get betOptions() {
     return this._betOptions;
   }
