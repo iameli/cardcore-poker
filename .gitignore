@@ -5,3 +5,4 @@ chromedriver/
 node_modules/
 dist/
 test-results/
+.claude/
