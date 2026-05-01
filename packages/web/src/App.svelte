@@ -2,14 +2,21 @@
   import SignIn from "./components/SignIn.svelte";
   import Lobby from "./components/Lobby.svelte";
   import GameRoom from "./components/GameRoom.svelte";
+  import PasswordGate from "./components/PasswordGate.svelte";
   import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
   import { restoreDemoSession, clearDemoSession } from "./lib/demo-pds.js";
+
+  // Temporary soft-launch gate — remove before going live properly.
+  let unlocked = $state(
+    typeof localStorage !== "undefined" && localStorage.getItem("cardcore_unlocked") === "1",
+  );
 
   let page = $state("signin");
   let session = $state(null);
   let tableUri = $state(null);
 
   $effect(() => {
+    if (!unlocked) return;
     // Check for OAuth callback (atcute uses fragment mode: #code=...&state=...&iss=...)
     const hash = window.location.hash;
     // Only handle callback if all required params are present
@@ -88,7 +95,9 @@
 </script>
 
 <div class="app">
-  {#if page === "signin"}
+  {#if !unlocked}
+    <PasswordGate onUnlock={() => (unlocked = true)} />
+  {:else if page === "signin"}
     <SignIn {onSignIn} />
   {:else if page === "lobby"}
     <Lobby {session} {onJoinTable} {onSignOut} />
