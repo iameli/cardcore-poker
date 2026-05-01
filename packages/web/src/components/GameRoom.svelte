@@ -218,17 +218,26 @@
         min: minRaise,
         max: ourChips,
         pot,
-        quickAmounts: [],
+        quickAmounts: buildQuickAmounts(pot, minRaise, ourChips),
       };
     } else {
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
     }
+  }
 
-    // Reactive trigger
-    phase = phase;
-    pot = pot;
+  function buildQuickAmounts(pot, min, max) {
+    const out = [];
+    const candidates = [
+      ["1/3 POT", Math.floor(pot / 3)],
+      ["1/2 POT", Math.floor(pot / 2)],
+      ["POT", pot],
+    ];
+    for (const [label, amt] of candidates) {
+      if (amt > min && amt <= max) out.push({ label, amount: amt });
+    }
+    return out;
   }
 
   function mapBetOptions(opts) {
