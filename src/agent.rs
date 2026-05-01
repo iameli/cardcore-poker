@@ -95,7 +95,9 @@ impl PlayerAgent {
 
     /// Submit a betting decision.
     pub fn bet(&mut self, action: BetAction) -> crate::Result<AgentOutput> {
-        let seat = self.seat.ok_or_else(|| crate::Error::Protocol("not seated".into()))?;
+        let seat = self
+            .seat
+            .ok_or_else(|| crate::Error::Protocol("not seated".into()))?;
 
         let amount = match &action {
             BetAction::Raise(amt) => Some(*amt as i64),
@@ -129,12 +131,11 @@ impl PlayerAgent {
             Some(s) => s,
             None => return vec![],
         };
-        let card_map: std::collections::HashMap<Point, crate::card::Card> =
-            crypto::card_points()
-                .unwrap()
-                .into_iter()
-                .map(|(c, p)| (p, c))
-                .collect();
+        let card_map: std::collections::HashMap<Point, crate::card::Card> = crypto::card_points()
+            .unwrap()
+            .into_iter()
+            .map(|(c, p)| (p, c))
+            .collect();
 
         self.state.game.players[seat]
             .hole_encrypted
@@ -150,12 +151,11 @@ impl PlayerAgent {
 
     /// Get the community cards revealed so far.
     pub fn community_cards(&self) -> Vec<crate::card::Card> {
-        let card_map: std::collections::HashMap<Point, crate::card::Card> =
-            crypto::card_points()
-                .unwrap()
-                .into_iter()
-                .map(|(c, p)| (p, c))
-                .collect();
+        let card_map: std::collections::HashMap<Point, crate::card::Card> = crypto::card_points()
+            .unwrap()
+            .into_iter()
+            .map(|(c, p)| (p, c))
+            .collect();
 
         self.state
             .game
@@ -173,21 +173,27 @@ impl PlayerAgent {
     /// Get game state as JSON for the frontend.
     pub fn game_state_json(&self) -> String {
         let state = &self.state.game;
-        let players: Vec<serde_json::Value> = state.players.iter().enumerate().map(|(i, p)| {
-            serde_json::json!({
-                "seat": i,
-                "chips": p.chips,
-                "bet": p.bet_this_street,
-                "folded": p.folded,
-                "all_in": p.all_in,
+        let players: Vec<serde_json::Value> = state
+            .players
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                serde_json::json!({
+                    "seat": i,
+                    "chips": p.chips,
+                    "bet": p.bet_this_street,
+                    "folded": p.folded,
+                    "all_in": p.all_in,
+                })
             })
-        }).collect();
+            .collect();
         serde_json::to_string(&serde_json::json!({
             "pot": state.pot,
             "currentBet": state.current_bet,
             "actionOn": state.action_on,
             "players": players,
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     }
 
     /// Try to auto-respond if there are pending non-interactive actions.
@@ -231,10 +237,9 @@ impl PlayerAgent {
             };
 
             // Find an action for us that isn't a bet or verify-seed-we-already-did
-            let my_action = valid.iter().find(|va| {
-                va.player_id == seat
-                    && !matches!(va.kind, ValidActionKind::Bet { .. })
-            });
+            let my_action = valid
+                .iter()
+                .find(|va| va.player_id == seat && !matches!(va.kind, ValidActionKind::Bet { .. }));
 
             let va = match my_action {
                 Some(va) => va.clone(),
@@ -271,12 +276,12 @@ impl PlayerAgent {
                         deck: encrypted,
                     })?;
 
-                    emitted.push(self.encode_action_union(&ActionAction::ShuffleDeck(Box::new(
-                        ShuffleDeck {
+                    emitted.push(self.encode_action_union(&ActionAction::ShuffleDeck(
+                        Box::new(ShuffleDeck {
                             deck: deck_bytes,
                             extra_data: None,
-                        },
-                    )))?);
+                        }),
+                    ))?);
                     self.seq += 1;
                 }
                 ValidActionKind::LockDeck => {
@@ -395,9 +400,8 @@ impl PlayerAgent {
 
         match action {
             ActionAction::CommitSeed(cs) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::CommitSeed)
-                })?;
+                let player_id =
+                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::CommitSeed))?;
                 let mut commitment = [0u8; crypto::HASH_BYTES];
                 commitment.copy_from_slice(&cs.commitment);
                 Ok(Action::CommitSeed {
@@ -406,9 +410,8 @@ impl PlayerAgent {
                 })
             }
             ActionAction::ShuffleDeck(sd) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::ShuffleDeck)
-                })?;
+                let player_id =
+                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::ShuffleDeck))?;
                 let deck: Vec<Point> = sd
                     .deck
                     .iter()
@@ -421,9 +424,8 @@ impl PlayerAgent {
                 Ok(Action::ShuffleDeck { player_id, deck })
             }
             ActionAction::LockDeck(ld) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::LockDeck)
-                })?;
+                let player_id =
+                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::LockDeck))?;
                 let deck: Vec<Point> = ld
                     .deck
                     .iter()
@@ -437,9 +439,10 @@ impl PlayerAgent {
             }
             ActionAction::RevealLockKey(rlk) => {
                 let pos = rlk.deck_position as usize;
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::RevealLockKey { deck_position } if *deck_position == pos)
-                })?;
+                let player_id = find_player_for_action(
+                    &valid,
+                    |k| matches!(k, ValidActionKind::RevealLockKey { deck_position } if *deck_position == pos),
+                )?;
                 let mut scalar_arr = [0u8; crypto::SCALAR_BYTES];
                 scalar_arr.copy_from_slice(&rlk.scalar);
                 Ok(Action::RevealLockKey {
@@ -449,27 +452,32 @@ impl PlayerAgent {
                 })
             }
             ActionAction::Bet(bet) => {
-                let player_id = find_player_for_action(&valid, |k| {
-                    matches!(k, ValidActionKind::Bet { .. })
-                })?;
+                let player_id =
+                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::Bet { .. }))?;
                 let action = lex_bet_to_internal(bet);
                 Ok(Action::Bet { player_id, action })
             }
             ActionAction::RevealHand(rh) => {
                 // Match by deck positions — each player has unique hole card positions
-                let reveal_positions: Vec<usize> = rh.reveals.iter()
+                let reveal_positions: Vec<usize> = rh
+                    .reveals
+                    .iter()
                     .map(|ps| ps.deck_position as usize)
                     .collect();
-                let player_id = self.state.hole_card_positions
+                let player_id = self
+                    .state
+                    .hole_card_positions
                     .iter()
                     .enumerate()
                     .find(|(i, positions)| {
                         *positions == &reveal_positions && !self.state.showdown_revealed[*i]
                     })
                     .map(|(i, _)| i)
-                    .ok_or_else(|| crate::Error::InvalidAction(
-                        "reveal positions don't match any player".into()
-                    ))?;
+                    .ok_or_else(|| {
+                        crate::Error::InvalidAction(
+                            "reveal positions don't match any player".into(),
+                        )
+                    })?;
                 let scalars: Vec<(usize, Scalar)> = rh
                     .reveals
                     .iter()
@@ -485,7 +493,9 @@ impl PlayerAgent {
                 // Match this seed to a player by checking against commitments
                 let seed_bytes = vs.seed.to_vec();
                 let hash = crypto::blake2b(&seed_bytes)?;
-                let player_id = self.state.seed_commitments
+                let player_id = self
+                    .state
+                    .seed_commitments
                     .iter()
                     .enumerate()
                     .find(|(i, c)| {
@@ -493,9 +503,11 @@ impl PlayerAgent {
                             && !self.state.seeds_verified[*i]
                     })
                     .map(|(i, _)| i)
-                    .ok_or_else(|| crate::Error::InvalidAction(
-                        "seed doesn't match any unverified commitment".into()
-                    ))?;
+                    .ok_or_else(|| {
+                        crate::Error::InvalidAction(
+                            "seed doesn't match any unverified commitment".into(),
+                        )
+                    })?;
                 Ok(Action::VerifySeed {
                     player_id,
                     seed: seed_bytes,
@@ -561,7 +573,10 @@ fn decode_action_cbor<'a>(cbor: &'a [u8]) -> crate::Result<ActionAction<'a>> {
                 .map_err(|e| crate::Error::Protocol(format!("decode verifySeed: {}", e)))?;
             Ok(ActionAction::VerifySeed(Box::new(vs)))
         }
-        other => Err(crate::Error::Protocol(format!("unknown action type: {}", other))),
+        other => Err(crate::Error::Protocol(format!(
+            "unknown action type: {}",
+            other
+        ))),
     }
 }
 

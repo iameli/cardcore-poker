@@ -1,14 +1,17 @@
 //! Test DAG-CBOR serialization of lexicon types via dasl.
 
-use cardcore_poker::lexicon::re_cardco::poker::*;
 use cardcore_poker::lexicon::re_cardco::poker::table::*;
+use cardcore_poker::lexicon::re_cardco::poker::*;
 use jacquard_common::deps::bytes::Bytes;
 use jacquard_common::types::string::Datetime;
 
 #[test]
 fn table_cbor_roundtrip() {
     let table = Table {
-        players: vec!["did:plc:alice".to_string().into(), "did:plc:bob".to_string().into()],
+        players: vec![
+            "did:plc:alice".to_string().into(),
+            "did:plc:bob".to_string().into(),
+        ],
         starting_chips: 1000,
         small_blind: 10,
         created_at: Datetime::now(),

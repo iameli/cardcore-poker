@@ -59,11 +59,13 @@ fn full_hand_with_seed_verification() {
         .collect();
 
     // Table
-    state.apply(&Action::Table {
-        players: (0..2).map(|i| format!("did:example:player{}", i)).collect(),
-        starting_chips: 1000,
-        small_blind: 10,
-    }).unwrap();
+    state
+        .apply(&Action::Table {
+            players: (0..2).map(|i| format!("did:example:player{}", i)).collect(),
+            starting_chips: 1000,
+            small_blind: 10,
+        })
+        .unwrap();
 
     // Commit seeds
     for p in &players {
@@ -156,8 +158,7 @@ fn full_hand_with_seed_verification() {
     let replay_players: Vec<SimPlayer> = (0..2).map(SimPlayer::new).collect();
     for i in 0..2 {
         assert_eq!(
-            players[i].keys.shuffle_encrypt.0,
-            replay_players[i].keys.shuffle_encrypt.0,
+            players[i].keys.shuffle_encrypt.0, replay_players[i].keys.shuffle_encrypt.0,
             "shuffle keys should be reproducible from seed"
         );
     }
@@ -173,11 +174,15 @@ fn fuzz_random_actions() {
         let mut players: Vec<SimPlayer> = (0..num_players).map(SimPlayer::new).collect();
 
         // Table
-        state.apply(&Action::Table {
-            players: (0..num_players).map(|i| format!("did:example:player{}", i)).collect(),
-            starting_chips: 1000,
-            small_blind: 10,
-        }).unwrap();
+        state
+            .apply(&Action::Table {
+                players: (0..num_players)
+                    .map(|i| format!("did:example:player{}", i))
+                    .collect(),
+                starting_chips: 1000,
+                small_blind: 10,
+            })
+            .unwrap();
 
         let mut steps = 0;
         let max_steps = 10000;
@@ -205,7 +210,11 @@ fn fuzz_random_actions() {
                 );
             }
         }
-        assert!(state.seeds_verified.iter().all(|v| *v), "seed={}: all seeds should be verified", seed);
+        assert!(
+            state.seeds_verified.iter().all(|v| *v),
+            "seed={}: all seeds should be verified",
+            seed
+        );
         eprintln!(
             "seed={}: completed in {} steps ({} players)",
             seed, steps, num_players

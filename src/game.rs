@@ -215,7 +215,9 @@ impl GameState {
 
     /// Apply a bet action. Returns true if the betting round is over.
     pub fn apply_bet(&mut self, player_id: PlayerId, action: &BetAction) -> bool {
-        let to_call = self.current_bet.saturating_sub(self.players[player_id].bet_this_street);
+        let to_call = self
+            .current_bet
+            .saturating_sub(self.players[player_id].bet_this_street);
 
         match action {
             BetAction::Fold => {

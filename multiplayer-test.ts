@@ -86,8 +86,9 @@ async function main() {
     const password = `pass${Date.now()}`;
     const agent = new AtpAgent({ service: PDS_URL });
     await agent.createAccount({
-      handle, password,
-      email: `${handle.replace('.test','')}@test.invalid`,
+      handle,
+      password,
+      email: `${handle.replace(".test", "")}@test.invalid`,
     });
     const did = agent.session!.did;
     const seed = new TextEncoder().encode(`mpseed_${i}_${Date.now()}`);
@@ -100,15 +101,17 @@ async function main() {
   // Table consensus
   const tableRecord = {
     $type: "re.cardco.poker.table",
-    players: players.map(p => p.did),
+    players: players.map((p) => p.did),
     startingChips: 1000,
     smallBlind: 10,
     createdAt: new Date().toISOString(),
   };
   for (const p of players) {
     await p.agent.api.com.atproto.repo.putRecord({
-      repo: p.did, collection: "re.cardco.poker.table",
-      rkey: TABLE_RKEY, record: tableRecord,
+      repo: p.did,
+      collection: "re.cardco.poker.table",
+      rkey: TABLE_RKEY,
+      record: tableRecord,
     });
   }
   console.log(`\nTable created: ${TABLE_RKEY}`);
@@ -117,10 +120,13 @@ async function main() {
 
   // Subscribe to firehose FIRST, then write initial actions
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => { ws.close(); reject(new Error("timeout")); }, 120000);
+    const timeout = setTimeout(() => {
+      ws.close();
+      reject(new Error("timeout"));
+    }, 120000);
     const wsUrl = PDS_URL.replace("http", "ws") + "/xrpc/com.atproto.sync.subscribeRepos";
     const ws = new WebSocket(wsUrl);
-    const playerDids = new Set(players.map(p => p.did));
+    const playerDids = new Set(players.map((p) => p.did));
     const seen = new Set<string>();
     let done = false;
     let started = false;
@@ -146,7 +152,9 @@ async function main() {
         if (done) return;
         try {
           const frame = decodeFrame(data);
-          if (!frame) { return; }
+          if (!frame) {
+            return;
+          }
           if (frame.t !== "#commit") return;
           if (!playerDids.has(frame.repo)) return;
 
@@ -189,15 +197,30 @@ async function main() {
 
             // Check for completion
             if (type === "verifySeed") {
-              const verifyCount = Array.from(seen).filter(k => {
-                const c = actionStore.get(k.split(":").slice(0).join(":").replace(/^[^:]+:/, (m) => m));
+              const verifyCount = Array.from(seen).filter((k) => {
+                const c = actionStore.get(
+                  k
+                    .split(":")
+                    .slice(0)
+                    .join(":")
+                    .replace(/^[^:]+:/, (m) => m),
+                );
                 if (!c) return false;
-                try { return cborDecode(Buffer.from(c))?.$type?.includes("verifySeed"); } catch { return false; }
+                try {
+                  return cborDecode(Buffer.from(c))?.$type?.includes("verifySeed");
+                } catch {
+                  return false;
+                }
               }).length;
               // Simple: if we've seen a verifySeed, wait a bit then check
-              await new Promise(r => setTimeout(r, 1000));
-              const allVerifyActions = Array.from(actionStore.entries())
-                .filter(([_, v]) => { try { return cborDecode(Buffer.from(v))?.$type?.includes("verifySeed"); } catch { return false; } });
+              await new Promise((r) => setTimeout(r, 1000));
+              const allVerifyActions = Array.from(actionStore.entries()).filter(([_, v]) => {
+                try {
+                  return cborDecode(Buffer.from(v))?.$type?.includes("verifySeed");
+                } catch {
+                  return false;
+                }
+              });
               if (allVerifyActions.length >= NUM_PLAYERS) {
                 done = true;
                 clearTimeout(timeout);
@@ -211,7 +234,10 @@ async function main() {
       });
     });
 
-    ws.on("error", e => { clearTimeout(timeout); reject(e); });
+    ws.on("error", (e) => {
+      clearTimeout(timeout);
+      reject(e);
+    });
     ws.on("open", () => console.log("Firehose connected\n"));
   });
 
@@ -241,14 +267,20 @@ async function writeActions(player: Player, output: any, tableDid: string) {
 
     const record: any = {
       $type: "re.cardco.poker.action",
-      table: { uri: `at://${tableDid}/re.cardco.poker.table/${TABLE_RKEY}`, cid: "bafyplaceholder" },
-      seq, action: decoded,
+      table: {
+        uri: `at://${tableDid}/re.cardco.poker.table/${TABLE_RKEY}`,
+        cid: "bafyplaceholder",
+      },
+      seq,
+      action: decoded,
       createdAt: new Date().toISOString(),
     };
 
     await player.agent.api.com.atproto.repo.putRecord({
-      repo: player.did, collection: "re.cardco.poker.action",
-      rkey, record,
+      repo: player.did,
+      collection: "re.cardco.poker.action",
+      rkey,
+      record,
     });
     seqTracker.set(player.did, seq + 1);
   }
@@ -262,7 +294,9 @@ function decodeFrame(data: Buffer): any | null {
     const [header, body] = values;
     if (header?.op !== 1) return null;
     return { t: header.t, ...body };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 let betRng = 12345;
@@ -276,7 +310,7 @@ function pickBet(options: any[]): string {
   return hasCheck ? "check" : "fold";
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error("Fatal:", e.message || e);
   process.exit(1);
 });

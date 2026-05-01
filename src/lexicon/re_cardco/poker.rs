@@ -8,7 +8,6 @@
 pub mod action;
 pub mod table;
 
-
 #[allow(unused_imports)]
 use std::collections::BTreeMap;
 
@@ -23,10 +22,10 @@ use jacquard_derive::{IntoStatic, lexicon};
 use jacquard_lexicon::lexicon::LexiconDoc;
 use jacquard_lexicon::schema::LexiconSchema;
 
+use crate::lexicon::re_cardco::poker;
 #[allow(unused_imports)]
 use jacquard_lexicon::validation::{ConstraintError, ValidationPath};
-use serde::{Serialize, Deserialize};
-use crate::lexicon::re_cardco::poker;
+use serde::{Deserialize, Serialize};
 /// A betting action.
 
 #[lexicon]
@@ -476,11 +475,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("commitSeed"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "Commit a hashed seed for later verification.",
-                        ),
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Commit a hashed seed for later verification.",
+                    )),
                     required: Some(vec![SmolStr::new_static("commitment")]),
                     properties: {
                         #[allow(unused_mut)]
@@ -500,11 +497,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("lockDeck"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "Remove shuffle encryption and apply per-position lock keys.",
-                        ),
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Remove shuffle encryption and apply per-position lock keys.",
+                    )),
                     required: Some(vec![SmolStr::new_static("deck")]),
                     properties: {
                         #[allow(unused_mut)]
@@ -512,9 +507,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
                         map.insert(
                             SmolStr::new_static("deck"),
                             LexObjectProperty::Array(LexArray {
-                                description: Some(
-                                    CowStr::new_static("52 locked Ristretto255 points."),
-                                ),
+                                description: Some(CowStr::new_static(
+                                    "52 locked Ristretto255 points.",
+                                )),
                                 items: LexArrayItem::Bytes(LexBytes {
                                     ..Default::default()
                                 }),
@@ -531,17 +526,13 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("positionScalar"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "A deck position and its associated lock decryption scalar.",
-                        ),
-                    ),
-                    required: Some(
-                        vec![
-                            SmolStr::new_static("deckPosition"),
-                            SmolStr::new_static("scalar")
-                        ],
-                    ),
+                    description: Some(CowStr::new_static(
+                        "A deck position and its associated lock decryption scalar.",
+                    )),
+                    required: Some(vec![
+                        SmolStr::new_static("deckPosition"),
+                        SmolStr::new_static("scalar"),
+                    ]),
                     properties: {
                         #[allow(unused_mut)]
                         let mut map = BTreeMap::new();
@@ -568,9 +559,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("revealHand"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static("Reveal hole card lock keys at showdown."),
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Reveal hole card lock keys at showdown.",
+                    )),
                     required: Some(vec![SmolStr::new_static("reveals")]),
                     properties: {
                         #[allow(unused_mut)]
@@ -578,11 +569,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
                         map.insert(
                             SmolStr::new_static("reveals"),
                             LexObjectProperty::Array(LexArray {
-                                description: Some(
-                                    CowStr::new_static(
-                                        "Lock key reveals for hole card positions.",
-                                    ),
-                                ),
+                                description: Some(CowStr::new_static(
+                                    "Lock key reveals for hole card positions.",
+                                )),
                                 items: LexArrayItem::Ref(LexRef {
                                     r#ref: CowStr::new_static("#positionScalar"),
                                     ..Default::default()
@@ -598,17 +587,13 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("revealLockKey"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "Reveal a per-position lock scalar to deal a card.",
-                        ),
-                    ),
-                    required: Some(
-                        vec![
-                            SmolStr::new_static("deckPosition"),
-                            SmolStr::new_static("scalar")
-                        ],
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Reveal a per-position lock scalar to deal a card.",
+                    )),
+                    required: Some(vec![
+                        SmolStr::new_static("deckPosition"),
+                        SmolStr::new_static("scalar"),
+                    ]),
                     properties: {
                         #[allow(unused_mut)]
                         let mut map = BTreeMap::new();
@@ -635,11 +620,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("shuffleDeck"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "Encrypt all cards with shuffle key and permute.",
-                        ),
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Encrypt all cards with shuffle key and permute.",
+                    )),
                     required: Some(vec![SmolStr::new_static("deck")]),
                     properties: {
                         #[allow(unused_mut)]
@@ -647,9 +630,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
                         map.insert(
                             SmolStr::new_static("deck"),
                             LexObjectProperty::Array(LexArray {
-                                description: Some(
-                                    CowStr::new_static("52 encrypted Ristretto255 points."),
-                                ),
+                                description: Some(CowStr::new_static(
+                                    "52 encrypted Ristretto255 points.",
+                                )),
                                 items: LexArrayItem::Bytes(LexBytes {
                                     ..Default::default()
                                 }),
@@ -666,11 +649,9 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
             map.insert(
                 SmolStr::new_static("verifySeed"),
                 LexUserType::Object(LexObject {
-                    description: Some(
-                        CowStr::new_static(
-                            "Reveal the secret seed for full game replay and verification.",
-                        ),
-                    ),
+                    description: Some(CowStr::new_static(
+                        "Reveal the secret seed for full game replay and verification.",
+                    )),
                     required: Some(vec![SmolStr::new_static("seed")]),
                     properties: {
                         #[allow(unused_mut)]
@@ -695,7 +676,7 @@ fn lexicon_doc_re_cardco_poker_defs() -> LexiconDoc<'static> {
 
 pub mod commit_seed_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -798,7 +779,7 @@ where
 
 pub mod lock_deck_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -901,7 +882,7 @@ where
 
 pub mod position_scalar_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -1038,7 +1019,7 @@ where
 
 pub mod reveal_hand_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -1141,7 +1122,7 @@ where
 
 pub mod reveal_lock_key_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -1278,7 +1259,7 @@ where
 
 pub mod shuffle_deck_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -1381,7 +1362,7 @@ where
 
 pub mod verify_seed_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {

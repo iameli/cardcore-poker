@@ -27,10 +27,10 @@ test-web: build-wasm
     pnpm install
     pnpm --filter @cardcore/web test
 
-# Run the dev server
+# Run the dev server (Svelte client on :5173 + WS room server on :3003)
 dev: build-wasm
     pnpm install
-    pnpm --filter @cardcore/web dev
+    pnpm --filter @cardcore/web dev:all
 
 # Run all tests (native + WASM + web)
 test-all: test test-wasm test-web

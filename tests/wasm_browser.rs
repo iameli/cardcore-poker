@@ -177,9 +177,7 @@ fn three_player_hand_in_browser() {
     let mut agents: Vec<PlayerAgent> = dids
         .iter()
         .enumerate()
-        .map(|(i, did)| {
-            PlayerAgent::new(did, format!("seed_{}", i).as_bytes()).unwrap()
-        })
+        .map(|(i, did)| PlayerAgent::new(did, format!("seed_{}", i).as_bytes()).unwrap())
         .collect();
 
     let table_cbor = make_table_cbor(&dids, 1000, 10);
@@ -224,8 +222,7 @@ fn three_player_hand_in_browser() {
             let my_queue = std::mem::take(&mut queues[i]);
             for action in &my_queue {
                 any_progress = true;
-                if let AgentOutput::Actions(responses) = agents[i].receive_action(action).unwrap()
-                {
+                if let AgentOutput::Actions(responses) = agents[i].receive_action(action).unwrap() {
                     for j in 0..3 {
                         if j != i {
                             queues[j].extend(responses.clone());
@@ -303,9 +300,21 @@ fn simulator_runs_in_browser() {
     sim.run().unwrap();
 
     let events = sim.events();
-    assert!(events.iter().any(|e| matches!(e, GameEvent::TableCreated { .. })));
-    assert!(events.iter().any(|e| matches!(e, GameEvent::HoleCardsDealt { .. })));
-    assert!(events.iter().any(|e| matches!(e, GameEvent::CommunityDealt { street, .. } if street == "flop")));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, GameEvent::TableCreated { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, GameEvent::HoleCardsDealt { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, GameEvent::CommunityDealt { street, .. } if street == "flop"))
+    );
     assert!(events.iter().any(|e| matches!(e, GameEvent::SeedsVerified)));
 
     let json = serde_json::to_string(events).unwrap();
@@ -324,7 +333,8 @@ fn simulate_game_wasm_api() {
     assert!(!events.is_empty(), "should produce events");
 
     // Check expected event types are present
-    let types: Vec<&str> = events.iter()
+    let types: Vec<&str> = events
+        .iter()
         .filter_map(|e| e.get("type").and_then(|t| t.as_str()))
         .collect();
     assert!(types.contains(&"tableCreated"), "missing tableCreated");
@@ -352,7 +362,10 @@ fn simulate_game_wasm_api() {
     // Different seeds produce different games
     let json_a = simulate_game(2, 1000, 10, "passive", 1).unwrap();
     let json_b = simulate_game(2, 1000, 10, "passive", 2).unwrap();
-    assert_ne!(json_a, json_b, "different seeds should produce different games");
+    assert_ne!(
+        json_a, json_b,
+        "different seeds should produce different games"
+    );
 }
 
 /// Test that the same seed produces the exact same game (deterministic replay).
@@ -362,7 +375,10 @@ fn simulator_deterministic_replay() {
 
     let json1 = simulate_game(2, 1000, 10, "passive", 42).unwrap();
     let json2 = simulate_game(2, 1000, 10, "passive", 42).unwrap();
-    assert_eq!(json1, json2, "same config+seed must produce identical games");
+    assert_eq!(
+        json1, json2,
+        "same config+seed must produce identical games"
+    );
 }
 
 fn passive_bet(options: &[BetAction]) -> BetAction {

@@ -28,13 +28,11 @@ pub const POINT_BYTES: usize = 32;
 pub const HASH_BYTES: usize = 32;
 
 /// A secret scalar used to encrypt/decrypt cards.
-#[derive(Clone)]
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Scalar(#[serde(with = "serde_base64")] pub [u8; SCALAR_BYTES]);
 
 /// A Ristretto255 point representing an encrypted (or plaintext) card.
-#[derive(Clone, PartialEq, Eq, Hash)]
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Point(#[serde(with = "serde_base64")] pub [u8; POINT_BYTES]);
 
 pub mod serde_base64 {
@@ -52,9 +50,7 @@ pub mod serde_base64 {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         let s: &str = serde::Deserialize::deserialize(deserializer)?;
-        let vec = STANDARD
-            .decode(s)
-            .map_err(serde::de::Error::custom)?;
+        let vec = STANDARD.decode(s).map_err(serde::de::Error::custom)?;
         vec.try_into()
             .map_err(|_| serde::de::Error::custom(format!("expected {} bytes", N)))
     }
@@ -236,8 +232,7 @@ pub fn card_points() -> crate::Result<Vec<(Card, Point)>> {
 
 /// Encrypt (lock) a point by multiplying by a scalar.
 pub fn encrypt(point: &Point, scalar: &Scalar) -> crate::Result<Point> {
-    let p = to_dalek_point(point)
-        .ok_or_else(|| crate::Error::Crypto("invalid point".into()))?;
+    let p = to_dalek_point(point).ok_or_else(|| crate::Error::Crypto("invalid point".into()))?;
     let s = to_dalek_scalar(scalar);
     Ok(from_dalek_point(&(s * p)))
 }

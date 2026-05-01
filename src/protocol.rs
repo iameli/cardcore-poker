@@ -20,9 +20,13 @@ pub enum Phase {
     /// Players commit hashes of their secret seeds.
     CommitSeeds,
     /// Players take turns encrypting and shuffling the deck.
-    Shuffle { next_player: PlayerId },
+    Shuffle {
+        next_player: PlayerId,
+    },
     /// Players take turns removing shuffle encryption and adding per-position lock keys.
-    Lock { next_player: PlayerId },
+    Lock {
+        next_player: PlayerId,
+    },
     /// Players reveal per-position lock scalars to deal a card.
     Dealing {
         deal_type: DealType,
@@ -159,7 +163,14 @@ impl ProtocolState {
     pub fn apply(&mut self, action: &Action) -> crate::Result<()> {
         match (&self.phase, action) {
             // --- Table ---
-            (Phase::Init, Action::Table { players, starting_chips, small_blind }) => {
+            (
+                Phase::Init,
+                Action::Table {
+                    players,
+                    starting_chips,
+                    small_blind,
+                },
+            ) => {
                 let n = players.len();
                 if n < 2 || n > 10 {
                     return Err(crate::Error::InvalidAction("need 2-10 players".into()));
@@ -174,10 +185,13 @@ impl ProtocolState {
             }
 
             // --- Commit Seeds ---
-            (Phase::CommitSeeds, Action::CommitSeed {
-                player_id,
-                commitment,
-            }) => {
+            (
+                Phase::CommitSeeds,
+                Action::CommitSeed {
+                    player_id,
+                    commitment,
+                },
+            ) => {
                 if self.seed_commitments[*player_id].is_some() {
                     return Err(crate::Error::InvalidAction("already committed".into()));
                 }
@@ -194,10 +208,14 @@ impl ProtocolState {
             // --- Shuffle ---
             (Phase::Shuffle { next_player }, Action::ShuffleDeck { player_id, deck }) => {
                 if *player_id != *next_player {
-                    return Err(crate::Error::InvalidAction("not your turn to shuffle".into()));
+                    return Err(crate::Error::InvalidAction(
+                        "not your turn to shuffle".into(),
+                    ));
                 }
                 if deck.len() != 52 {
-                    return Err(crate::Error::InvalidAction("deck must have 52 cards".into()));
+                    return Err(crate::Error::InvalidAction(
+                        "deck must have 52 cards".into(),
+                    ));
                 }
                 self.game.deck = deck.clone();
                 self.shuffles_done += 1;
@@ -218,7 +236,9 @@ impl ProtocolState {
                     return Err(crate::Error::InvalidAction("not your turn to lock".into()));
                 }
                 if deck.len() != 52 {
-                    return Err(crate::Error::InvalidAction("deck must have 52 cards".into()));
+                    return Err(crate::Error::InvalidAction(
+                        "deck must have 52 cards".into(),
+                    ));
                 }
                 self.game.deck = deck.clone();
                 self.locks_done += 1;
@@ -299,7 +319,9 @@ impl ProtocolState {
             // --- Showdown ---
             (Phase::Showdown, Action::RevealHand { player_id, scalars }) => {
                 if self.game.players[*player_id].folded {
-                    return Err(crate::Error::InvalidAction("folded players don't reveal".into()));
+                    return Err(crate::Error::InvalidAction(
+                        "folded players don't reveal".into(),
+                    ));
                 }
                 if self.showdown_revealed[*player_id] {
                     return Err(crate::Error::InvalidAction("already revealed".into()));
@@ -441,10 +463,7 @@ impl ProtocolState {
 
     fn valid_bet_actions(&self, player_id: PlayerId) -> Vec<BetAction> {
         let player = &self.game.players[player_id];
-        let to_call = self
-            .game
-            .current_bet
-            .saturating_sub(player.bet_this_street);
+        let to_call = self.game.current_bet.saturating_sub(player.bet_this_street);
         let mut actions = Vec::new();
 
         if to_call == 0 {
@@ -489,7 +508,10 @@ impl ProtocolState {
             self.deal_reveals.clear();
             self.hole_card_positions[for_player].push(pos);
             self.phase = Phase::Dealing {
-                deal_type: DealType::HoleCard { for_player, card_idx },
+                deal_type: DealType::HoleCard {
+                    for_player,
+                    card_idx,
+                },
                 deck_position: pos,
             };
         }
@@ -503,9 +525,7 @@ impl ProtocolState {
 
         match deal_type {
             DealType::HoleCard { for_player, .. } => {
-                self.game.players[*for_player]
-                    .hole_encrypted
-                    .push(point);
+                self.game.players[*for_player].hole_encrypted.push(point);
                 self.next_deck_position += 1;
                 self.deal_reveals.clear();
                 self.hole_deal_queue.remove(0);
@@ -589,11 +609,13 @@ mod tests {
     fn setup_table(n: usize) -> ProtocolState {
         let mut state = ProtocolState::new();
         let players: Vec<String> = (0..n).map(|i| format!("did:example:player{}", i)).collect();
-        state.apply(&Action::Table {
-            players,
-            starting_chips: 1000,
-            small_blind: 10,
-        }).unwrap();
+        state
+            .apply(&Action::Table {
+                players,
+                starting_chips: 1000,
+                small_blind: 10,
+            })
+            .unwrap();
         state
     }
 
@@ -614,8 +636,18 @@ mod tests {
         let hash0 = crypto::blake2b(b"seed0").unwrap();
         let hash1 = crypto::blake2b(b"seed1").unwrap();
 
-        state.apply(&Action::CommitSeed { player_id: 0, commitment: hash0 }).unwrap();
-        state.apply(&Action::CommitSeed { player_id: 1, commitment: hash1 }).unwrap();
+        state
+            .apply(&Action::CommitSeed {
+                player_id: 0,
+                commitment: hash0,
+            })
+            .unwrap();
+        state
+            .apply(&Action::CommitSeed {
+                player_id: 1,
+                commitment: hash1,
+            })
+            .unwrap();
         assert!(matches!(state.phase, Phase::Shuffle { next_player: 0 }));
         assert_eq!(state.game.deck.len(), 52);
     }

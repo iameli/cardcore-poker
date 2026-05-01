@@ -25,10 +25,7 @@ pub enum GameEvent {
         small_blind: u64,
     },
     /// Cryptographic setup phase (commit/shuffle/lock).
-    SetupProgress {
-        phase: String,
-        player: usize,
-    },
+    SetupProgress { phase: String, player: usize },
     /// Blinds posted.
     BlindsPosted {
         small_blind_player: usize,
@@ -37,15 +34,9 @@ pub enum GameEvent {
         big_blind_amount: u64,
     },
     /// Hole cards dealt to a player (only the player sees their own).
-    HoleCardsDealt {
-        player: usize,
-        cards: Vec<String>,
-    },
+    HoleCardsDealt { player: usize, cards: Vec<String> },
     /// Community cards revealed.
-    CommunityDealt {
-        street: String,
-        cards: Vec<String>,
-    },
+    CommunityDealt { street: String, cards: Vec<String> },
     /// A player bet.
     PlayerBet {
         player: usize,
@@ -54,9 +45,7 @@ pub enum GameEvent {
         pot: u64,
     },
     /// A player folded.
-    PlayerFolded {
-        player: usize,
-    },
+    PlayerFolded { player: usize },
     /// Showdown: player reveals cards.
     ShowdownReveal {
         player: usize,
@@ -70,16 +59,11 @@ pub enum GameEvent {
         hand_description: String,
     },
     /// Win by fold (everyone else folded).
-    WinByFold {
-        player: usize,
-        amount: u64,
-    },
+    WinByFold { player: usize, amount: u64 },
     /// Seeds revealed for verification.
     SeedsVerified,
     /// Game complete with final chip counts.
-    GameOver {
-        chips: Vec<u64>,
-    },
+    GameOver { chips: Vec<u64> },
 }
 
 /// Bot strategy for auto-play.
@@ -174,10 +158,15 @@ impl Simulator {
         }
 
         self.events.push(GameEvent::GameOver {
-            chips: self.agents.iter().enumerate().map(|(i, _)| {
-                self.agents[i].phase(); // just to access state
-                0 // TODO: expose chip counts from agent
-            }).collect(),
+            chips: self
+                .agents
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    self.agents[i].phase(); // just to access state
+                    0 // TODO: expose chip counts from agent
+                })
+                .collect(),
         });
 
         Ok(&self.events)
@@ -256,16 +245,16 @@ impl Simulator {
             if !progress {
                 // Check for bets
                 for i in 0..self.agents.len() {
-                    if let AgentOutput::NeedBet { .. } =
-                        self.agents[i].auto_respond_if_needed()?
-                    {
+                    if let AgentOutput::NeedBet { .. } = self.agents[i].auto_respond_if_needed()? {
                         return Ok(());
                     }
                 }
                 return Ok(());
             }
         }
-        Err(crate::Error::Protocol("relay exceeded max iterations".into()))
+        Err(crate::Error::Protocol(
+            "relay exceeded max iterations".into(),
+        ))
     }
 
     fn drain_queues(&mut self) -> crate::Result<bool> {
@@ -304,9 +293,7 @@ impl Simulator {
 
             let mut found_bet = false;
             for i in 0..self.agents.len() {
-                if let AgentOutput::NeedBet { options } =
-                    self.agents[i].auto_respond_if_needed()?
-                {
+                if let AgentOutput::NeedBet { options } = self.agents[i].auto_respond_if_needed()? {
                     let bet = self.pick_bet(&options);
                     let bet_str = format_bet(&bet);
                     let amount = match &bet {
@@ -416,7 +403,10 @@ impl Simulator {
             let hole = self.agents[i].hole_cards();
             if hole.len() == 2 {
                 // Only emit once — check if we already emitted
-                let already = self.events.iter().any(|e| matches!(e, GameEvent::HoleCardsDealt { player, .. } if *player == i));
+                let already = self
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, GameEvent::HoleCardsDealt { player, .. } if *player == i));
                 if !already {
                     self.events.push(GameEvent::HoleCardsDealt {
                         player: i,
@@ -427,7 +417,11 @@ impl Simulator {
         }
 
         // Community card events
-        let prev_community_count = self.events.iter().filter(|e| matches!(e, GameEvent::CommunityDealt { .. })).count();
+        let prev_community_count = self
+            .events
+            .iter()
+            .filter(|e| matches!(e, GameEvent::CommunityDealt { .. }))
+            .count();
         match (prev_community_count, community.len()) {
             (0, n) if n >= 3 => {
                 self.events.push(GameEvent::CommunityDealt {
@@ -494,23 +488,38 @@ impl Simulator {
 
                 if roll < 40 {
                     // Check or call
-                    if has_check { BetAction::Check }
-                    else if has_call { BetAction::Call }
-                    else { options[0].clone() }
+                    if has_check {
+                        BetAction::Check
+                    } else if has_call {
+                        BetAction::Call
+                    } else {
+                        options[0].clone()
+                    }
                 } else if roll < 70 && has_raise {
                     // Raise — pick the raise option
-                    options.iter().find(|o| matches!(o, BetAction::Raise(_))).unwrap().clone()
+                    options
+                        .iter()
+                        .find(|o| matches!(o, BetAction::Raise(_)))
+                        .unwrap()
+                        .clone()
                 } else if roll < 90 && has_allin {
                     BetAction::AllIn
                 } else if roll >= 90 {
                     // Fold (but not if we can check for free)
-                    if has_check { BetAction::Check }
-                    else { BetAction::Fold }
+                    if has_check {
+                        BetAction::Check
+                    } else {
+                        BetAction::Fold
+                    }
                 } else {
                     // Fallback
-                    if has_check { BetAction::Check }
-                    else if has_call { BetAction::Call }
-                    else { options[0].clone() }
+                    if has_check {
+                        BetAction::Check
+                    } else if has_call {
+                        BetAction::Call
+                    } else {
+                        options[0].clone()
+                    }
                 }
             }
         }
@@ -531,7 +540,9 @@ impl Simulator {
     }
 
     fn all_complete(&self) -> bool {
-        self.agents.iter().all(|a| matches!(a.phase(), Phase::Complete))
+        self.agents
+            .iter()
+            .all(|a| matches!(a.phase(), Phase::Complete))
     }
 }
 

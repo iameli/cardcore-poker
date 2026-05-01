@@ -23,9 +23,6 @@ use jacquard_derive::{IntoStatic, lexicon, open_union};
 use jacquard_lexicon::lexicon::LexiconDoc;
 use jacquard_lexicon::schema::LexiconSchema;
 
-#[allow(unused_imports)]
-use jacquard_lexicon::validation::{ConstraintError, ValidationPath};
-use serde::{Serialize, Deserialize};
 use crate::lexicon::re_cardco::poker::Bet;
 use crate::lexicon::re_cardco::poker::CommitSeed;
 use crate::lexicon::re_cardco::poker::LockDeck;
@@ -33,11 +30,18 @@ use crate::lexicon::re_cardco::poker::RevealHand;
 use crate::lexicon::re_cardco::poker::RevealLockKey;
 use crate::lexicon::re_cardco::poker::ShuffleDeck;
 use crate::lexicon::re_cardco::poker::VerifySeed;
+#[allow(unused_imports)]
+use jacquard_lexicon::validation::{ConstraintError, ValidationPath};
+use serde::{Deserialize, Serialize};
 /// A single action in a poker hand. Key format: {table-tid}-{sequence-number}. Each action chains back to the previous via prev.
 
 #[lexicon]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, IntoStatic)]
-#[serde(rename_all = "camelCase", rename = "re.cardco.poker.action", tag = "$type")]
+#[serde(
+    rename_all = "camelCase",
+    rename = "re.cardco.poker.action",
+    tag = "$type"
+)]
 pub struct Action<'a> {
     ///The action payload.
     #[serde(borrow)]
@@ -53,7 +57,6 @@ pub struct Action<'a> {
     #[serde(borrow)]
     pub table: Data<'a>,
 }
-
 
 #[open_union]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, IntoStatic)]
@@ -90,9 +93,7 @@ pub struct ActionGetRecordOutput<'a> {
 }
 
 impl<'a> Action<'a> {
-    pub fn uri(
-        uri: impl Into<CowStr<'a>>,
-    ) -> Result<RecordUri<'a, ActionRecord>, UriError> {
+    pub fn uri(uri: impl Into<CowStr<'a>>) -> Result<RecordUri<'a, ActionRecord>, UriError> {
         RecordUri::try_from_uri(AtUri::new_cow(uri.into())?)
     }
 }
@@ -152,7 +153,7 @@ impl<'a> LexiconSchema for Action<'a> {
 
 pub mod action_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -312,10 +313,7 @@ where
     S::Seq: action_state::IsUnset,
 {
     /// Set the `seq` field (required)
-    pub fn seq(
-        mut self,
-        value: impl Into<i64>,
-    ) -> ActionBuilder<'a, action_state::SetSeq<S>> {
+    pub fn seq(mut self, value: impl Into<i64>) -> ActionBuilder<'a, action_state::SetSeq<S>> {
         self._fields.3 = Option::Some(value.into());
         ActionBuilder {
             _state: PhantomData,

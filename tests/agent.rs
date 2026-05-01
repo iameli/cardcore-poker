@@ -40,12 +40,18 @@ fn relay_until_stuck_with_queues(
         if for_bob.is_empty() && for_alice.is_empty() {
             let a = match alice.auto_respond_if_needed().unwrap() {
                 AgentOutput::NeedBet { options } => Some(options),
-                AgentOutput::Actions(a) => { for_bob.extend(a); None }
+                AgentOutput::Actions(a) => {
+                    for_bob.extend(a);
+                    None
+                }
                 AgentOutput::Waiting => None,
             };
             let b = match bob.auto_respond_if_needed().unwrap() {
                 AgentOutput::NeedBet { options } => Some(options),
-                AgentOutput::Actions(a) => { for_alice.extend(a); None }
+                AgentOutput::Actions(a) => {
+                    for_alice.extend(a);
+                    None
+                }
                 AgentOutput::Waiting => None,
             };
             if a.is_some() || b.is_some() || (for_bob.is_empty() && for_alice.is_empty()) {
@@ -111,9 +117,17 @@ fn two_agents_full_hand() {
     let (a_bet, b_bet) = relay_until_stuck_with_queues(&mut alice, &mut bob, for_bob, for_alice);
 
     // Should have hole cards now
-    eprintln!("After relay - Alice phase: {:?}, Bob phase: {:?}", alice.phase(), bob.phase());
+    eprintln!(
+        "After relay - Alice phase: {:?}, Bob phase: {:?}",
+        alice.phase(),
+        bob.phase()
+    );
     eprintln!("Alice hole encrypted: {}", alice.phase() == alice.phase()); // just to force evaluation
-    assert_eq!(alice.hole_cards().len(), 2, "alice should have 2 hole cards");
+    assert_eq!(
+        alice.hole_cards().len(),
+        2,
+        "alice should have 2 hole cards"
+    );
     assert_eq!(bob.hole_cards().len(), 2, "bob should have 2 hole cards");
     eprintln!("Alice: {:?}", alice.hole_cards());
     eprintln!("Bob: {:?}", bob.hole_cards());

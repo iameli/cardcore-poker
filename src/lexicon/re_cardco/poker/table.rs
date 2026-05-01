@@ -15,7 +15,7 @@ use jacquard_common::CowStr;
 #[allow(unused_imports)]
 use jacquard_common::deps::codegen::unicode_segmentation::UnicodeSegmentation;
 use jacquard_common::types::collection::{Collection, RecordError};
-use jacquard_common::types::string::{Did, AtUri, Cid, Datetime};
+use jacquard_common::types::string::{AtUri, Cid, Datetime, Did};
 use jacquard_common::types::uri::{RecordUri, UriError};
 use jacquard_common::xrpc::XrpcResp;
 use jacquard_derive::{IntoStatic, lexicon};
@@ -24,12 +24,16 @@ use jacquard_lexicon::schema::LexiconSchema;
 
 #[allow(unused_imports)]
 use jacquard_lexicon::validation::{ConstraintError, ValidationPath};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 /// Establishes a poker table. First record in any hand. All players must agree on this before the hand begins.
 
 #[lexicon]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, IntoStatic)]
-#[serde(rename_all = "camelCase", rename = "re.cardco.poker.table", tag = "$type")]
+#[serde(
+    rename_all = "camelCase",
+    rename = "re.cardco.poker.table",
+    tag = "$type"
+)]
 pub struct Table<'a> {
     pub created_at: Datetime,
     ///Player DIDs in seat order.
@@ -56,9 +60,7 @@ pub struct TableGetRecordOutput<'a> {
 }
 
 impl<'a> Table<'a> {
-    pub fn uri(
-        uri: impl Into<CowStr<'a>>,
-    ) -> Result<RecordUri<'a, TableRecord>, UriError> {
+    pub fn uri(uri: impl Into<CowStr<'a>>) -> Result<RecordUri<'a, TableRecord>, UriError> {
         RecordUri::try_from_uri(AtUri::new_cow(uri.into())?)
     }
 }
@@ -150,7 +152,7 @@ impl<'a> LexiconSchema for Table<'a> {
 
 pub mod table_state {
 
-    pub use crate::lexicon::builder_types::{Set, Unset, IsSet, IsUnset};
+    pub use crate::lexicon::builder_types::{IsSet, IsUnset, Set, Unset};
     #[allow(unused)]
     use ::core::marker::PhantomData;
     mod sealed {
@@ -225,7 +227,12 @@ pub mod table_state {
 /// Builder for constructing an instance of this type
 pub struct TableBuilder<'a, S: table_state::State> {
     _state: PhantomData<fn() -> S>,
-    _fields: (Option<Datetime>, Option<Vec<Did<'a>>>, Option<i64>, Option<i64>),
+    _fields: (
+        Option<Datetime>,
+        Option<Vec<Did<'a>>>,
+        Option<i64>,
+        Option<i64>,
+    ),
     _lifetime: PhantomData<&'a ()>,
 }
 

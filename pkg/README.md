@@ -79,19 +79,19 @@ Hot-seat multiplayer at the terminal. The full cryptographic protocol runs — c
 ## WASM API
 
 ```typescript
-import init, { WasmAgent } from './pkg/cardcore_poker.js';
+import init, { WasmAgent } from "./pkg/cardcore_poker.js";
 await init();
 
 const agent = new WasmAgent("did:plc:alice", seed);
-const out = agent.receive_table(tableCbor);     // → WasmOutput
-const out2 = agent.receive_action(actionCbor);   // → WasmOutput
+const out = agent.receive_table(tableCbor); // → WasmOutput
+const out2 = agent.receive_action(actionCbor); // → WasmOutput
 
 // out.kind: "actions" | "need_bet" | "waiting"
 // out.action(0): Uint8Array (DAG-CBOR to publish)
 
 agent.bet("call");
-agent.hole_cards();       // → '["Jh", "Kc"]'
-agent.community_cards();  // → '["8s", "9s", "Jc", "Qd", "7s"]'
+agent.hole_cards(); // → '["Jh", "Kc"]'
+agent.community_cards(); // → '["8s", "9s", "Jc", "Qd", "7s"]'
 ```
 
 ## License

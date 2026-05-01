@@ -4,33 +4,55 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
-  test-native:
-    name: Native tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --release
-
-  test-wasm:
-    name: WASM browser tests
+  format:
+    name: Formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@wasm-pack
-      - run: wasm-pack test --headless --chrome --release
+          components: rustfmt
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+      - name: Prettier
+        run: pnpm format:check
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  docker:
+    name: Docker (full test suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cardcore-poker-test:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run full test suite
+        run: docker run --rm cardcore-poker-test:ci
 
   build-wasm:
-    name: Build WASM package
+    name: WASM artifact
     runs-on: ubuntu-latest
+    needs: docker
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
