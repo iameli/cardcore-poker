@@ -42,10 +42,11 @@ RUN pnpm install --frozen-lockfile && cargo fetch
 RUN wasm-pack build --target web --release \
     && wasm-pack build --target nodejs --release --out-dir pkg-node
 
-# Run all tests: native Rust + WASM browser + web frontend + multiplayer
+# Run all tests: native Rust + WASM browser + web frontend (Playwright over
+# the local PDS) + 4-player AT-Protocol-firehose multiplayer test
 CMD ["sh", "-c", "\
     echo '=== Native Rust tests ===' && cargo test --release && \
     echo '=== WASM browser tests ===' && wasm-pack test --headless --chrome --release && \
-    echo '=== Web frontend tests ===' && pnpm --filter @cardcore/web test && \
-    echo '=== Multiplayer test ===' && npx tsx multiplayer-test.ts \
+    echo '=== Web frontend tests (Playwright + local PDS) ===' && pnpm --filter @cardcore/web test && \
+    echo '=== Multiplayer integration (firehose) ===' && npx tsx multiplayer-test.ts \
 "]

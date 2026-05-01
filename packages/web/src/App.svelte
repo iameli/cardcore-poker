@@ -2,12 +2,12 @@
   import SignIn from "./components/SignIn.svelte";
   import Lobby from "./components/Lobby.svelte";
   import GameRoom from "./components/GameRoom.svelte";
-  import { handleCallback, getStoredSession, signOut, getDemoIdentity } from "./lib/atproto.js";
+  import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
+  import { restoreDemoSession, clearDemoSession } from "./lib/demo-pds.js";
 
   let page = $state("signin");
   let session = $state(null);
-  let roomId = $state(null);
-  let spectating = $state(false);
+  let tableUri = $state(null);
 
   $effect(() => {
     // Check for OAuth callback (atcute uses fragment mode: #code=...&state=...&iss=...)
@@ -38,18 +38,28 @@
       window.history.replaceState({}, "", window.location.pathname);
       page = "signin";
     } else {
-      // Check existing session
-      getStoredSession()
-        .then((s) => {
+      // Try OAuth session first, then fall back to a stored demo session.
+      (async () => {
+        try {
+          const s = await getStoredSession();
+          if (s) {
+            session = s;
+            page = "lobby";
+            return;
+          }
+        } catch (err) {
+          console.warn("OAuth session restore failed:", err);
+        }
+        try {
+          const s = await restoreDemoSession();
           if (s) {
             session = s;
             page = "lobby";
           }
-        })
-        .catch((err) => {
-          console.warn("Session restore failed:", err);
-          page = "signin";
-        });
+        } catch (err) {
+          console.warn("Demo session restore failed:", err);
+        }
+      })();
     }
   });
 
@@ -58,29 +68,22 @@
     page = "lobby";
   }
 
-  function onJoinRoom(id) {
-    roomId = id;
-    spectating = false;
+  function onJoinTable(uri) {
+    tableUri = uri;
     page = "game";
   }
 
-  function onSpectateRoom(id) {
-    roomId = id;
-    spectating = true;
-    page = "game";
-  }
-
-  function onLeaveRoom() {
-    roomId = null;
-    spectating = false;
+  function onLeaveTable() {
+    tableUri = null;
     page = "lobby";
   }
 
   function onSignOut() {
-    signOut();
+    if (session?.isDemo) clearDemoSession();
+    else signOut();
     session = null;
     page = "signin";
-    roomId = null;
+    tableUri = null;
   }
 </script>
 
@@ -88,9 +91,9 @@
   {#if page === "signin"}
     <SignIn {onSignIn} />
   {:else if page === "lobby"}
-    <Lobby {session} {onJoinRoom} {onSpectateRoom} {onSignOut} />
+    <Lobby {session} {onJoinTable} {onSignOut} />
   {:else if page === "game"}
-    <GameRoom {session} {roomId} {spectating} {onLeaveRoom} />
+    <GameRoom {session} {tableUri} onLeaveRoom={onLeaveTable} />
   {/if}
 </div>
 

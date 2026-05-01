@@ -3,19 +3,22 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import metadata from "./public/oauth-client-metadata.json" with { type: "json" };
 
 const SERVER_HOST = "127.0.0.1";
-const SERVER_PORT = 5173;
+const SERVER_PORT = process.env.VITE_PORT || 5173;
+const PDS_PORT = process.env.PDS_PORT || 2583;
 
 export default defineConfig({
   server: {
     host: SERVER_HOST,
     port: SERVER_PORT,
+    allowedHosts: process.env.VITE_HOST ? [process.env.VITE_HOST] : [],
     proxy: {
-      "/ws": {
-        target: "ws://localhost:3003",
+      // AT Protocol XRPC endpoints (HTTP + WebSocket for firehose) → local PDS.
+      // Production builds talk to the user's real PDS directly via OAuth, so
+      // this proxy is only used in dev/demo mode.
+      "/xrpc": {
+        target: `http://localhost:${PDS_PORT}`,
         ws: true,
-      },
-      "/api": {
-        target: "http://localhost:3003",
+        changeOrigin: true,
       },
     },
   },

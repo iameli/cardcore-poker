@@ -1,115 +1,118 @@
 /**
- * Game Session — WASM-backed multiplayer poker session.
+ * PlayerSession — drives one player's WasmAgent through the poker protocol.
  *
- * Wraps the Rust WasmAgent for WebSocket-based multiplayer.
- * Each player runs their own WasmAgent. Actions flow through
- * WebSocket as DAG-CBOR encoded re.cardco.poker.action records.
+ * The session has no knowledge of transport details. It receives action CBOR
+ * from somewhere (an ActionPoller, a firehose, whatever), feeds the local
+ * WasmAgent, and asks its caller to publish whatever the agent emits.
  *
- * Protocol:
- * 1. Table established → each agent receives table CBOR
- * 2. Agents auto-produce: commit → shuffle → lock → reveal
- * 3. Cards are queried from the agent (hole_cards, community_cards)
- * 4. Betting: agent.check_status() → if need_bet → agent.bet(action)
- * 5. All actions are broadcast via WebSocket to other players
+ * Lifecycle:
+ *   1. construct (creates the WasmAgent with a fresh seed)
+ *   2. receiveTable(tableCbor) once — kicks off CommitSeed emission
+ *   3. receiveAction(cbor) for each peer action delivered
+ *   4. bet(action) when the UI receives a betting decision
+ *
+ * The session calls `publishAction({ seq, cbor })` for every action the
+ * WasmAgent emits, and `onUpdate()` whenever observable state changes.
  */
+import { createAgent, parseCard } from "./cardcore-wasm.js";
 
-import { createAgent, encodeRecord, decodeRecord, parseCard } from "./cardcore-wasm.js";
-
-/**
- * Manages a single player's WASM-backed poker session.
- * Communicates with other players via a send callback (WebSocket).
- */
 export class PlayerSession {
   /**
    * @param {object} opts
-   * @param {string} opts.did - player DID
-   * @param {Uint8Array|string} opts.seed - secret seed
-   * @param {function} opts.send - callback to broadcast CBOR actions
+   * @param {string} opts.did
+   * @param {Uint8Array} opts.seed
+   * @param {(args: {seq: number, cbor: Uint8Array}) => Promise<void>} opts.publishAction
+   * @param {() => void} [opts.onUpdate]
    */
-  constructor({ did, seed, send }) {
+  constructor({ did, seed, publishAction, onUpdate }) {
     this.did = did;
     this.agent = createAgent(did, seed);
-    this.send = send;
-    this.seat = -1;
-    this.ready = false;
-    this._phase = "init";
-    this._holeCards = [];
-    this._communityCards = [];
-    this._betOptions = [];
+    this.publishAction = publishAction;
+    this.onUpdate = onUpdate || (() => {});
+    this.seq = 0;
+    this.publishing = Promise.resolve();
     this._needsBet = false;
+    this._betOptions = [];
   }
 
-  /** Feed the table record. Returns actions to broadcast. */
-  receiveTable(tableCbor) {
-    console.log("[PlayerSession] receiveTable DID=" + this.did.slice(-8));
-
-    const output = this.agent.receive_table(tableCbor);
-    return this._processOutput(output);
+  async receiveTable(tableCbor) {
+    const out = this.agent.receive_table(tableCbor);
+    await this._processOutput(out);
   }
 
-  /** Feed an action from another player. Returns actions to broadcast. */
-  receiveAction(actionCbor) {
-    console.log(
-      "[PlayerSession] receiveAction DID=" + this.did.slice(-8),
-      "len=" + actionCbor.length,
-    );
-
-    const output = this.agent.receive_action(actionCbor);
-    return this._processOutput(output);
+  async receiveAction(actionCbor) {
+    const out = this.agent.receive_action(actionCbor);
+    await this._processOutput(out);
   }
 
-  /** Submit a bet decision. Returns actions to broadcast. */
-  bet(action) {
-    const output = this.agent.bet(action);
-    return this._processOutput(output);
+  async bet(action) {
+    const out = this.agent.bet(action);
+    await this._processOutput(out);
   }
 
-  /** Check if we need to make a bet. */
-  checkStatus() {
-    const output = this.agent.check_status();
-    return this._processOutput(output);
+  async _processOutput(output) {
+    if (output.kind === "actions") {
+      // Serialize publishes so putRecord calls land on the PDS in seq order.
+      for (let i = 0; i < output.action_count; i++) {
+        const cbor = new Uint8Array(output.action(i));
+        const mySeq = this.seq++;
+        this.publishing = this.publishing.then(() => this.publishAction({ seq: mySeq, cbor }));
+      }
+      await this.publishing;
+      this._needsBet = false;
+      this._betOptions = [];
+    } else if (output.kind === "need_bet") {
+      this._needsBet = true;
+      try {
+        this._betOptions = JSON.parse(output.bet_options);
+      } catch {
+        this._betOptions = [];
+      }
+    } else {
+      this._needsBet = false;
+      this._betOptions = [];
+    }
+    this.onUpdate();
   }
 
-  /** Get our hole cards as parsed objects. */
+  // ─── Observable state ───────────────────────────────────────────────
+
   get holeCards() {
     try {
-      const raw = this.agent.hole_cards();
-      if (!raw || raw === "[]") return [];
-      return JSON.parse(raw).map(parseCard).filter(Boolean);
+      return JSON.parse(this.agent.hole_cards()).map(parseCard).filter(Boolean);
     } catch {
-      return this._holeCards;
+      return [];
     }
   }
 
-  /** Get community cards as parsed objects. */
   get communityCards() {
-    const raw = this.agent.community_cards();
-    console.log("[PlayerSession] communityCards raw:", raw);
-
     try {
-      const raw = this.agent.community_cards();
-      if (!raw || raw === "[]") return [];
-      return JSON.parse(raw).map(parseCard).filter(Boolean);
+      return JSON.parse(this.agent.community_cards()).map(parseCard).filter(Boolean);
     } catch {
-      return this._communityCards;
+      return [];
     }
   }
 
-  /** Current phase from the agent. */
+  get rawHoleCards() {
+    try {
+      return JSON.parse(this.agent.hole_cards());
+    } catch {
+      return [];
+    }
+  }
+
   get phase() {
-    return this._phase;
+    try {
+      return this.agent.phase();
+    } catch {
+      return "Init";
+    }
   }
 
-  /** Whether the agent needs a bet decision. */
-  get needsBet() {
-    return this._needsBet;
+  get isComplete() {
+    return this.phase === "Complete";
   }
 
-  /** Available bet options. */
-
-  /** Whether the game is complete (Phase::Complete). */
-
-  /** Get full game state as parsed object. */
   get gameState() {
     try {
       return JSON.parse(this.agent.game_state());
@@ -118,60 +121,14 @@ export class PlayerSession {
     }
   }
 
-  get isComplete() {
-    try {
-      return this.agent.phase() === "Complete";
-    } catch {
-      return false;
-    }
+  get needsBet() {
+    return this._needsBet;
   }
 
   get betOptions() {
     return this._betOptions;
   }
 
-  _processOutput(output) {
-    console.log("[PlayerSession] output kind=" + output.kind, "n=" + (output.action_count || 0));
-
-    const actions = [];
-    if (output.kind === "actions") {
-      for (let i = 0; i < output.action_count; i++) {
-        const cbor = new Uint8Array(output.action(i));
-        actions.push(cbor);
-        // Broadcast each action
-        if (this.send) {
-          this.send(cbor);
-        }
-      }
-      // Refresh card state after actions
-      this._refreshCards();
-      this._phase = "playing";
-      this._needsBet = false;
-    } else if (output.kind === "need_bet") {
-      this._needsBet = true;
-      this._phase = "betting";
-      try {
-        this._betOptions = JSON.parse(output.bet_options);
-      } catch {
-        this._betOptions = [];
-      }
-    } else {
-      this._phase = "waiting";
-      this._needsBet = false;
-    }
-    return actions;
-  }
-
-  _refreshCards() {
-    try {
-      this._holeCards = JSON.parse(this.agent.hole_cards());
-    } catch {}
-    try {
-      this._communityCards = JSON.parse(this.agent.community_cards());
-    } catch {}
-  }
-
-  /** Clean up. */
   destroy() {
     if (this.agent) {
       try {
@@ -182,22 +139,7 @@ export class PlayerSession {
   }
 }
 
-/**
- * Build a table record CBOR for the WasmAgent.
- */
-export function buildTableCbor({ players, startingChips, smallBlind }) {
-  return encodeRecord({
-    $type: "re.cardco.poker.table",
-    players,
-    startingChips,
-    smallBlind,
-    createdAt: new Date().toISOString(),
-  });
-}
-
-/**
- * Generate a random 32-byte seed.
- */
+/** Generate a 32-byte random seed. */
 export function generateSeed() {
   const seed = new Uint8Array(32);
   crypto.getRandomValues(seed);

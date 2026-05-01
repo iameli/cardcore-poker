@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "dev:server": "node server/index.js",
-    "dev:all": "concurrently -n server,client -c blue,green \"pnpm run dev:server\" \"pnpm run dev\"",
+    "dev:pds": "node ../dev-env/run.mjs",
+    "dev:all": "concurrently -n pds,client -c blue,green \"pnpm run dev:pds\" \"pnpm run dev\"",
     "start": "pnpm run dev:all",
     "build": "vite build",
     "preview": "vite preview",
@@ -16,11 +16,7 @@
   "dependencies": {
     "@atcute/client": "^4.2.1",
     "@atcute/oauth-browser-client": "^3.0.0",
-    "@atproto/oauth-client-browser": "^0.3.0",
-    "@ipld/dag-cbor": "^9.2.6",
-    "express": "^4.21.0",
-    "uuid": "^10.0.0",
-    "ws": "^8.18.0"
+    "@ipld/dag-cbor": "^9.2.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

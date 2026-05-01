@@ -1,5 +1,6 @@
 <script>
-  import { signIn, getDemoIdentity } from "../lib/atproto.js";
+  import { signIn } from "../lib/atproto.js";
+  import { getOrCreateDemoSession } from "../lib/demo-pds.js";
 
   let { onSignIn } = $props();
 
@@ -24,13 +25,16 @@
     }
   }
 
-  function doDemoSignIn() {
-    const identity = getDemoIdentity();
-    onSignIn({
-      did: identity.did,
-      handle: identity.handle,
-      name: identity.name,
-    });
+  async function doDemoSignIn() {
+    loading = true;
+    error = "";
+    try {
+      const session = await getOrCreateDemoSession();
+      onSignIn(session);
+    } catch (e) {
+      error = "Demo signin failed: " + (e?.message || e);
+      loading = false;
+    }
   }
 </script>
 

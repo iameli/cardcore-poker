@@ -14,11 +14,15 @@ function resolveChromium(): string | undefined {
 }
 
 const SYSTEM_CHROMIUM = resolveChromium();
+// Default to headed locally (so you can watch); headless in CI / Docker /
+// any environment without an X display.
+const HEADLESS =
+  process.env.CI === "true" || process.env.PLAYWRIGHT_HEADLESS === "true" || !process.env.DISPLAY;
 
 export default defineConfig({
   testDir: "./tests",
   testMatch: /.*\.spec\.ts$/,
-  timeout: 60_000,
+  timeout: 90_000,
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -27,15 +31,17 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:5173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
-    headless: SYSTEM_CHROMIUM ? false : true,
+    headless: HEADLESS,
     viewport: { width: 1280, height: 800 },
     launchOptions: SYSTEM_CHROMIUM
       ? {
           executablePath: SYSTEM_CHROMIUM,
-          args: ["--headless=new", "--no-sandbox", "--disable-gpu"],
+          args: HEADLESS ? ["--headless=new", "--no-sandbox", "--disable-gpu"] : ["--no-sandbox"],
+          slowMo: HEADLESS ? 0 : 250,
         }
       : {
           args: ["--no-sandbox"],
+          slowMo: HEADLESS ? 0 : 250,
         },
   },
   projects: [{ name: "chromium" }],

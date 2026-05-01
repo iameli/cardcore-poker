@@ -1,100 +1,71 @@
 <script>
-  import { onMount } from "svelte";
-  import { ATPublisher, buildTableRecord } from "../lib/atproto-publisher.js";
   import { initWasm } from "../lib/cardcore-wasm.js";
-  import { fetchProfile } from "../lib/atproto.js";
+  import { Publisher } from "../lib/transport.js";
 
-  let { session, onJoinRoom, onSpectateRoom, onSignOut } = $props();
+  let { session, onJoinTable, onSignOut } = $props();
 
-  let rooms = $state([]);
-  let joinId = $state("");
+  let opponentHandle = $state("");
+  let joinUri = $state("");
   let creating = $state(false);
   let error = $state("");
-  let loaded = $state(false);
-  let atpRoomUri = $state(null);
-  let userAvatar = $state(null);
-
-  onMount(() => {
-    if (session?.session) {
-      const did = session.did;
-      if (did) {
-        fetchProfile(did).then((profile) => {
-          if (profile?.avatar) userAvatar = profile.avatar;
-        });
-      }
-    }
-  });
 
   $effect(() => {
     initWasm().catch(() => {});
-    fetchRooms();
-    const interval = setInterval(fetchRooms, 5000);
-    return () => clearInterval(interval);
   });
 
-  async function fetchRooms() {
-    try {
-      const res = await fetch("/api/rooms");
-      if (res.ok) {
-        rooms = await res.json();
-        loaded = true;
-      }
-    } catch {
-      // server may not be running yet
-    }
+  /**
+   * Resolve a handle to its DID. For demo accounts on the local PDS, the
+   * Vite proxy forwards to com.atproto.identity.resolveHandle. For real
+   * Bluesky handles in production, the same call works against the user's
+   * PDS.
+   */
+  async function resolveHandle(handle) {
+    const trimmed = handle.trim().replace(/^@/, "");
+    const url = `/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(trimmed)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Could not resolve handle: ${trimmed}`);
+    const data = await res.json();
+    return data.did;
   }
 
-  async function createRoom() {
+  async function createTable() {
+    if (!opponentHandle.trim()) {
+      error = "Enter your opponent's handle";
+      return;
+    }
+    if (!session?.client) {
+      error = "Sign in first";
+      return;
+    }
     creating = true;
     error = "";
     try {
-      const res = await fetch("/api/rooms", { method: "POST" });
-      if (res.ok) {
-        const { roomId } = await res.json();
-
-        // If we have a real AT Protocol session, publish a table record
-        if (session?.session?.fetchHandler && session?.did) {
-          try {
-            const publisher = new ATPublisher({
-              handler: session.session.fetchHandler,
-              did: session.did,
-            });
-            const result = await publisher.createTable({
-              players: [session.did],
-              startingChips: 1000,
-              smallBlind: 10,
-            });
-            atpRoomUri = result.uri;
-            console.log("[Lobby] Published table record:", result.uri);
-            // Register the AT URI with the room server
-            await fetch(`/api/rooms/${roomId}/atp`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ atpUri: result.uri }),
-            });
-          } catch (e) {
-            console.warn("[Lobby] AT Protocol publish failed (non-fatal):", e.message);
-          }
-        }
-
-        onJoinRoom(roomId);
-      } else {
-        error = "Failed to create room";
+      const opponentDid = await resolveHandle(opponentHandle);
+      if (opponentDid === session.did) {
+        error = "Pick a different player";
+        return;
       }
-    } catch {
-      error = "Server not available. Start the server with: npm run dev:server";
+      const publisher = new Publisher({ client: session.client, did: session.did });
+      const result = await publisher.createTable({
+        players: [session.did, opponentDid],
+        startingChips: 1000,
+        smallBlind: 10,
+      });
+      onJoinTable(result.uri);
+    } catch (e) {
+      error = e?.message || String(e);
     } finally {
       creating = false;
     }
   }
 
-  function joinRoom() {
-    const id = joinId.trim();
-    if (!id) {
-      error = "Enter a room ID";
+  function joinTable() {
+    const uri = joinUri.trim();
+    if (!uri.startsWith("at://")) {
+      error = "Paste an at:// URI";
       return;
     }
-    onJoinRoom(id);
+    onJoinTable(uri);
   }
 
   const playerName = $derived(session?.handle || session?.name || "Player");
@@ -103,68 +74,59 @@
 <div class="lobby">
   <header>
     <div class="user-info">
-      {#if userAvatar}
-        <div class="avatar-circle">
-          <img src={userAvatar} alt="avatar" />
-        </div>
-      {/if}
       <span class="name">{playerName}</span>
+      <span class="did" title={session?.did}>
+        {session?.did?.slice(0, 12)}…{session?.did?.slice(-6)}
+      </span>
     </div>
-    <button class="btn logout" onclick={onSignOut}>Leave</button>
+    <button class="btn logout" onclick={onSignOut}>Sign Out</button>
   </header>
 
   <div class="content">
     <h2>Lobby</h2>
 
-    <div class="actions">
-      <button class="btn primary" onclick={createRoom} disabled={creating}>
-        {creating ? "Creating..." : "Create New Room"}
-      </button>
-
-      <div class="divider"><span>or join existing</span></div>
-
+    <section class="card">
+      <h3>Start a New Table</h3>
+      <p class="hint">Enter the handle of the player you want to play with.</p>
       <div class="join-row">
         <input
           type="text"
-          placeholder="Room ID"
-          bind:value={joinId}
-          onkeydown={(e) => e.key === "Enter" && joinRoom()}
+          placeholder="opponent.bsky.social"
+          bind:value={opponentHandle}
+          disabled={creating}
+          data-testid="opponent-handle"
         />
-        <button class="btn secondary" onclick={joinRoom}> Join </button>
+        <button
+          class="btn primary"
+          onclick={createTable}
+          disabled={creating}
+          data-testid="create-table"
+        >
+          {creating ? "Creating…" : "Create Table"}
+        </button>
       </div>
+    </section>
 
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
-    </div>
+    <div class="divider"><span>or</span></div>
 
-    <div class="room-list">
-      <h3>Active Rooms ({rooms.length})</h3>
-      {#if !loaded}
-        <p class="loading">Connecting to server...</p>
-      {:else if rooms.length === 0}
-        <p class="empty">No rooms yet. Create one!</p>
-      {:else}
-        {#each rooms as room}
-          <div class="room-card">
-            <div class="room-id">{room.id}</div>
-            <div class="room-players">
-              {room.playerCount} player{room.playerCount !== 1 ? "s" : ""}
-              {#if room.spectatorCount > 0}
-                <span class="spectator-count"> ({room.spectatorCount} watching)</span>
-              {/if}
-              {#if room.hasGame}
-                <span class="live-badge">● LIVE</span>
-              {/if}
-            </div>
-            <button class="btn small" onclick={() => onJoinRoom(room.id)}> Join </button>
-            <button class="btn small spectate" onclick={() => onSpectateRoom(room.id)}>
-              Watch
-            </button>
-          </div>
-        {/each}
-      {/if}
-    </div>
+    <section class="card">
+      <h3>Join an Existing Table</h3>
+      <p class="hint">Paste the table's AT URI (the creator shares it with you).</p>
+      <div class="join-row">
+        <input
+          type="text"
+          placeholder="at://did:plc:.../re.cardco.poker.table/..."
+          bind:value={joinUri}
+          onkeydown={(e) => e.key === "Enter" && joinTable()}
+          data-testid="join-uri"
+        />
+        <button class="btn secondary" onclick={joinTable} data-testid="join-table">Join</button>
+      </div>
+    </section>
+
+    {#if error}
+      <p class="error">{error}</p>
+    {/if}
   </div>
 </div>
 
@@ -185,27 +147,17 @@
   }
   .user-info {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .avatar-circle {
-    width: 28px;
-    height: 28px;
-    border: 2px solid #1a1a1a;
-    border-radius: 50%;
-    overflow: hidden;
-    flex-shrink: 0;
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
-  }
-  .avatar-circle img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    flex-direction: column;
+    gap: 0.1rem;
   }
   .name {
     font-size: 0.5rem;
     color: #1a1a1a;
+  }
+  .did {
+    font-size: 0.32rem;
+    color: #1a1a1a;
+    opacity: 0.5;
   }
   .content {
     flex: 1;
@@ -213,32 +165,40 @@
     width: 100%;
     margin: 0 auto;
     padding: 2rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
   h2 {
     text-align: center;
     font-size: 1.7rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1rem;
     color: #1a1a1a;
     letter-spacing: 2px;
   }
   h3 {
-    font-size: 0.5rem;
+    font-size: 0.55rem;
     color: #1a1a1a;
-    margin-bottom: 0.75rem;
-    opacity: 0.7;
+    margin-bottom: 0.5rem;
   }
-  .actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    margin-bottom: 2rem;
+  .card {
+    border: 3px solid #1a1a1a;
+    box-shadow: 6px 6px 0 #1a1a1a;
+    padding: 1rem;
+    background: #ffffff;
+  }
+  .hint {
+    font-size: 0.4rem;
+    color: #1a1a1a;
+    opacity: 0.6;
+    margin-bottom: 0.75rem;
   }
   .btn {
-    padding: 0.75rem 1.5rem;
+    padding: 0.7rem 1.2rem;
     border: 2px solid #1a1a1a;
     border-radius: 0;
     font-family: inherit;
-    font-size: 0.5rem;
+    font-size: 0.45rem;
     cursor: pointer;
     letter-spacing: 1px;
     background: #ffffff;
@@ -263,27 +223,14 @@
   .primary {
     background: #c0392b;
     color: #ffffff;
-    border-color: #1a1a1a;
   }
   .secondary {
     background: #1a1a1a;
     color: #ffffff;
-    border-color: #1a1a1a;
-    white-space: nowrap;
-  }
-  .small {
-    padding: 0.4rem 0.8rem;
-    font-size: 0.4rem;
-    background: #1a1a1a;
-    color: #ffffff;
   }
   .logout {
-    background: #ffffff;
-    color: #1a1a1a;
-    border: 2px solid #1a1a1a;
     font-size: 0.4rem;
     padding: 0.4rem 0.8rem;
-    box-shadow: 3px 3px 0 #1a1a1a;
   }
   .logout:hover {
     background: #c0392b;
@@ -295,13 +242,13 @@
   }
   .join-row input {
     flex: 1;
-    padding: 0.75rem;
+    padding: 0.7rem;
     border: 2px solid #1a1a1a;
     border-radius: 0;
     background: #ffffff;
     color: #1a1a1a;
     font-family: inherit;
-    font-size: 0.5rem;
+    font-size: 0.42rem;
     outline: none;
   }
   .join-row input:focus {
@@ -329,66 +276,7 @@
     color: #c0392b;
     font-size: 0.45rem;
     text-align: center;
-  }
-  .room-list {
-    background: #ffffff;
-    border: 3px solid #1a1a1a;
-    border-radius: 0;
-    padding: 1rem;
-  }
-  .room-card {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 0;
-    border-bottom: 2px solid #1a1a1a;
-  }
-  .room-card:last-child {
-    border-bottom: none;
-  }
-  .room-id {
-    font-size: 0.5rem;
-    color: #1a1a1a;
-    flex: 1;
-  }
-  .room-players {
-    font-size: 0.4rem;
-    color: #1a1a1a;
-    opacity: 0.6;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .spectator-count {
-    color: #888;
-  }
-  .live-badge {
-    color: #c0392b;
-    animation: pulse 1.5s infinite;
-  }
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.4;
-    }
-  }
-  .spectate {
-    background: #ffffff;
-    color: #1a1a1a;
-    border: 2px solid #1a1a1a;
-  }
-  .spectate:hover {
-    background: #f0f0f0;
-  }
-  .loading,
-  .empty {
-    font-size: 0.45rem;
-    color: #1a1a1a;
-    opacity: 0.5;
-    text-align: center;
-    padding: 1rem;
+    padding: 0.5rem;
+    border: 2px dashed #c0392b;
   }
 </style>
