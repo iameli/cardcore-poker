@@ -61,6 +61,21 @@ const REDIRECT_URI = import.meta.env.DEV
   : import.meta.env.VITE_OAUTH_REDIRECT_URI;
 
 /**
+ * Resolve a DID to a PDS origin URL, with a dev-mode shortcut.
+ *
+ * In dev (`import.meta.env.DEV`) every demo account lives on the local PDS
+ * Vite is proxying, so we just return our own origin and skip the PLC lookup
+ * (which wouldn't work anyway — the local PLC isn't exposed to the browser).
+ * In prod we walk the DID document.
+ */
+export async function pdsForDid(did, ownPdsUri) {
+  if (import.meta.env.DEV) {
+    return ownPdsUri ?? (typeof window !== "undefined" ? window.location.origin : "");
+  }
+  return await resolveDidToPds(did);
+}
+
+/**
  * Resolve a DID to its Personal Data Server (PDS) endpoint.
  * Handles did:plc (via PLC directory) and did:web (via well-known).
  */

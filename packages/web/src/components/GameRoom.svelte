@@ -10,6 +10,7 @@
   import { FirehoseSubscriber } from "../lib/firehose.js";
   import { LEXICONS } from "../lib/atproto-publisher.js";
   import { GAME_PHASES } from "../lib/poker-engine.js";
+  import { pdsForDid } from "../lib/atproto.js";
 
   let { session, tableUri, onLeaveRoom } = $props();
 
@@ -104,7 +105,6 @@
 
       const peerDids = playerDids.filter((d) => d !== session.did);
       _firehose = new FirehoseSubscriber({
-        client: session.client,
         peerDids,
         tableUri,
         ownPdsUri: session.pdsUri,
@@ -138,11 +138,21 @@
     if (collection !== LEXICONS.TABLE) {
       throw new Error(`URI is not a poker table: ${collection}`);
     }
-    const res = await session.client.get("com.atproto.repo.getRecord", {
-      params: { repo, collection, rkey },
-    });
-    if (!res.ok) throw new Error(`getRecord failed: ${res.status}`);
-    return { record: res.data.value, cid: res.data.cid };
+    // Records live on the AUTHOR's PDS, not ours. Resolve the repo DID to
+    // its PDS endpoint and do an unauthenticated fetch — getRecord is public.
+    const pds = await pdsForDid(repo, session.pdsUri);
+    const url =
+      `${pds}/xrpc/com.atproto.repo.getRecord` +
+      `?repo=${encodeURIComponent(repo)}` +
+      `&collection=${encodeURIComponent(collection)}` +
+      `&rkey=${encodeURIComponent(rkey)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`getRecord(${repo}) ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    return { record: data.value, cid: data.cid };
   }
 
   function restoreOrCreateSeed(uri) {

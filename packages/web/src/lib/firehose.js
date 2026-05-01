@@ -15,7 +15,7 @@
 import { decodeMultiple } from "cbor-x";
 import { CarReader } from "@ipld/car";
 import * as dagCbor from "@ipld/dag-cbor";
-import { resolveDidToPds } from "./atproto.js";
+import { pdsForDid } from "./atproto.js";
 import { LEXICONS } from "./atproto-publisher.js";
 
 const ACTION_PATH_PREFIX = `${LEXICONS.ACTION}/`;
@@ -48,17 +48,6 @@ async function* extractActionRecords(carBytes) {
   }
 }
 
-/**
- * Resolve `did` to a PDS origin (e.g. `https://milkcap.us-west.host.bsky.network`).
- * In dev mode we shortcut to our own origin — every demo account lives on the
- * local PDS that Vite is proxying — so we don't have to teach the browser how
- * to find a localhost PLC directory.
- */
-async function pdsForDid(did, ownPdsUri) {
-  if (import.meta.env.DEV) return ownPdsUri ?? window.location.origin;
-  return await resolveDidToPds(did);
-}
-
 function pdsToWsBase(pdsUri) {
   // http://x → ws://x ; https://x → wss://x
   return pdsUri.replace(/^http/, "ws");
@@ -67,14 +56,12 @@ function pdsToWsBase(pdsUri) {
 export class FirehoseSubscriber {
   /**
    * @param {object} opts
-   * @param {object} opts.client - @atcute Client (for backfill via listRecords)
    * @param {string[]} opts.peerDids - peer DIDs to listen for (excludes self)
    * @param {string} opts.tableUri - table AT URI (for filtering action records)
    * @param {string} opts.ownPdsUri - the local user's PDS, used as the dev fallback
    * @param {(did: string, seq: number, actionCbor: Uint8Array) => void} opts.onAction
    */
-  constructor({ client, peerDids, tableUri, ownPdsUri, onAction }) {
-    this.client = client;
+  constructor({ peerDids, tableUri, ownPdsUri, onAction }) {
     this.peerDids = peerDids;
     this.tableUri = tableUri;
     this.ownPdsUri = ownPdsUri;
@@ -83,15 +70,19 @@ export class FirehoseSubscriber {
     this.sockets = []; // { ws, dids: Set }
     this.stopped = false;
     this.reconnectDelays = new Map(); // pdsUri → ms
+    this.cursorByPds = new Map(); // pdsUri → last firehose seq seen
+    this.pdsByDid = new Map(); // did → pdsUri
   }
 
   async start() {
-    // Group peers by PDS so we open one socket per host.
+    // Resolve every peer DID → PDS up front. Group peers by PDS so we open
+    // one socket per host.
     const byPds = new Map(); // pdsUri → did[]
     await Promise.all(
       this.peerDids.map(async (did) => {
         try {
           const pds = await pdsForDid(did, this.ownPdsUri);
+          this.pdsByDid.set(did, pds);
           if (!byPds.has(pds)) byPds.set(pds, []);
           byPds.get(pds).push(did);
         } catch (e) {
@@ -100,8 +91,9 @@ export class FirehoseSubscriber {
       }),
     );
 
-    // Backfill from each peer's repo via listRecords. Live events from before
-    // we subscribed would otherwise be missed.
+    // Backfill from each peer's PDS via listRecords (the canonical PDS for
+    // that peer, NOT the local user's). Live events from before we
+    // subscribed would otherwise be missed.
     await Promise.all(this.peerDids.map((did) => this._backfill(did)));
 
     // Open one firehose subscription per unique PDS.
@@ -121,17 +113,18 @@ export class FirehoseSubscriber {
   }
 
   async _backfill(did) {
+    const pds = this.pdsByDid.get(did);
+    if (!pds) return;
     try {
-      const res = await this.client.get("com.atproto.repo.listRecords", {
-        params: {
-          repo: did,
-          collection: LEXICONS.ACTION,
-          limit: 100,
-          reverse: true,
-        },
-      });
+      const url =
+        `${pds}/xrpc/com.atproto.repo.listRecords` +
+        `?repo=${encodeURIComponent(did)}` +
+        `&collection=${encodeURIComponent(LEXICONS.ACTION)}` +
+        `&limit=100&reverse=true`;
+      const res = await fetch(url);
       if (!res.ok) return;
-      const records = res.data.records || [];
+      const data = await res.json();
+      const records = data.records || [];
       for (const r of records) {
         if (r.value?.table?.uri !== this.tableUri) continue;
         const seq = r.value.seq;
@@ -144,7 +137,12 @@ export class FirehoseSubscriber {
 
   _openSocket(pdsUri, dids) {
     if (this.stopped) return;
-    const url = `${pdsToWsBase(pdsUri)}/xrpc/com.atproto.sync.subscribeRepos`;
+    // On reconnect, resume from the last firehose seq we saw on this PDS so
+    // we don't miss anything that happened during the gap.
+    const cursor = this.cursorByPds.get(pdsUri);
+    const url =
+      `${pdsToWsBase(pdsUri)}/xrpc/com.atproto.sync.subscribeRepos` +
+      (cursor != null ? `?cursor=${cursor}` : "");
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     const slot = { ws, pdsUri, dids };
@@ -157,7 +155,14 @@ export class FirehoseSubscriber {
     ws.addEventListener("message", async (ev) => {
       try {
         const frame = decodeFrame(new Uint8Array(ev.data));
-        if (!frame || frame.t !== "#commit") return;
+        if (!frame) return;
+        // Track the firehose-level seq from EVERY frame so reconnects can
+        // resume — even from frames we don't otherwise care about.
+        if (typeof frame.seq === "number") {
+          const prev = this.cursorByPds.get(pdsUri) ?? -1;
+          if (frame.seq > prev) this.cursorByPds.set(pdsUri, frame.seq);
+        }
+        if (frame.t !== "#commit") return;
         if (!dids.has(frame.repo)) return;
         if (!frame.blocks) return;
 
