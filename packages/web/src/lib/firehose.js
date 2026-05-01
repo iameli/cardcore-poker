@@ -1,16 +1,24 @@
 /**
  * Firehose subscriber for `com.atproto.sync.subscribeRepos`.
  *
- * Each peer in a poker hand has their action records on their own PDS. We
- * open one WebSocket per unique PDS, decode the binary CBOR frame stream,
- * filter for #commit events from the player DIDs we care about, dig the
- * action records out of the CAR-encoded `blocks` payload, and emit the
- * inner action CBOR for the local WasmAgent.
+ * Two modes:
  *
- * On startup we also do a one-shot listRecords backfill to catch anything
- * that was published before we subscribed (e.g. a dealer who published their
- * commitSeed before the joiner navigated to the game). Events are
- * deduplicated by (did, seq) so backfill + live can race safely.
+ *  1. **Filtered firehose service** (prod) — when `VITE_FIREHOSE_URL` is set,
+ *     we open a single WebSocket to that endpoint and pass every peer DID as
+ *     a `wantedDids` query parameter. The service does the filtering for us
+ *     so we only receive commits from the players in this hand. One socket
+ *     covers any number of peers regardless of which PDS they're on.
+ *
+ *  2. **Per-PDS** (dev fallback) — when no firehose service is configured,
+ *     we resolve each peer's PDS via the DID document (or the dev shortcut
+ *     to the local PDS) and open one socket per unique host. We filter
+ *     client-side. Wasteful on the public network; fine for the local dev
+ *     PDS since it only knows our demo accounts.
+ *
+ * On startup we also do a one-shot listRecords backfill (always against each
+ * peer's authoritative PDS) to catch anything published before we
+ * subscribed. Events are deduplicated by (did, seq) so backfill + live can
+ * race safely.
  */
 import { decodeMultiple } from "cbor-x";
 import { CarReader } from "@ipld/car";
@@ -48,9 +56,10 @@ async function* extractActionRecords(carBytes) {
   }
 }
 
-function pdsToWsBase(pdsUri) {
-  // http://x → ws://x ; https://x → wss://x
-  return pdsUri.replace(/^http/, "ws");
+function originToWs(uri) {
+  // http://x → ws://x ; https://x → wss://x ; ws[s]://x stays as-is.
+  if (uri.startsWith("ws://") || uri.startsWith("wss://")) return uri;
+  return uri.replace(/^http/, "ws");
 }
 
 export class FirehoseSubscriber {
@@ -67,38 +76,55 @@ export class FirehoseSubscriber {
     this.ownPdsUri = ownPdsUri;
     this.onAction = onAction;
     this.seen = new Set(); // `${did}:${seq}` keys
-    this.sockets = []; // { ws, dids: Set }
+    this.sockets = []; // { ws, key, dids: Set }
     this.stopped = false;
-    this.reconnectDelays = new Map(); // pdsUri → ms
-    this.cursorByPds = new Map(); // pdsUri → last firehose seq seen
-    this.pdsByDid = new Map(); // did → pdsUri
+    this.reconnectDelays = new Map(); // socket key → ms
+    this.cursorBySocket = new Map(); // socket key → last firehose seq seen
+    this.pdsByDid = new Map(); // did → pdsUri (always populated for backfill)
   }
 
   async start() {
-    // Resolve every peer DID → PDS up front. Group peers by PDS so we open
-    // one socket per host.
-    const byPds = new Map(); // pdsUri → did[]
+    // Resolve every peer DID → PDS up front. Needed for backfill regardless
+    // of which firehose mode we use.
     await Promise.all(
       this.peerDids.map(async (did) => {
         try {
           const pds = await pdsForDid(did, this.ownPdsUri);
           this.pdsByDid.set(did, pds);
-          if (!byPds.has(pds)) byPds.set(pds, []);
-          byPds.get(pds).push(did);
         } catch (e) {
           console.warn(`[firehose] could not resolve PDS for ${did}:`, e?.message || e);
         }
       }),
     );
 
-    // Backfill from each peer's PDS via listRecords (the canonical PDS for
-    // that peer, NOT the local user's). Live events from before we
-    // subscribed would otherwise be missed.
+    // Backfill from each peer's PDS via listRecords. Live events from before
+    // we subscribed would otherwise be missed.
     await Promise.all(this.peerDids.map((did) => this._backfill(did)));
 
-    // Open one firehose subscription per unique PDS.
-    for (const [pds, dids] of byPds) {
-      this._openSocket(pds, new Set(dids));
+    const filteredFirehose = import.meta.env.VITE_FIREHOSE_URL;
+    if (filteredFirehose) {
+      // Single connection to the filtered firehose service.
+      const dids = new Set(this.peerDids);
+      this._openSocket({
+        key: "filtered",
+        wsBase: originToWs(filteredFirehose),
+        dids,
+        wantedDids: this.peerDids,
+      });
+    } else {
+      // Fallback: one socket per unique PDS.
+      const byPds = new Map(); // pdsUri → did[]
+      for (const [did, pds] of this.pdsByDid) {
+        if (!byPds.has(pds)) byPds.set(pds, []);
+        byPds.get(pds).push(did);
+      }
+      for (const [pds, dids] of byPds) {
+        this._openSocket({
+          key: pds,
+          wsBase: originToWs(pds),
+          dids: new Set(dids),
+        });
+      }
     }
   }
 
@@ -135,21 +161,24 @@ export class FirehoseSubscriber {
     }
   }
 
-  _openSocket(pdsUri, dids) {
+  _openSocket({ key, wsBase, dids, wantedDids }) {
     if (this.stopped) return;
-    // On reconnect, resume from the last firehose seq we saw on this PDS so
-    // we don't miss anything that happened during the gap.
-    const cursor = this.cursorByPds.get(pdsUri);
-    const url =
-      `${pdsToWsBase(pdsUri)}/xrpc/com.atproto.sync.subscribeRepos` +
-      (cursor != null ? `?cursor=${cursor}` : "");
+    const params = new URLSearchParams();
+    if (wantedDids) {
+      for (const did of wantedDids) params.append("wantedDids", did);
+    }
+    const cursor = this.cursorBySocket.get(key);
+    if (cursor != null) params.set("cursor", String(cursor));
+    const qs = params.toString();
+    const url = `${wsBase}/xrpc/com.atproto.sync.subscribeRepos${qs ? `?${qs}` : ""}`;
+
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
-    const slot = { ws, pdsUri, dids };
+    const slot = { ws, key, dids, wantedDids };
     this.sockets.push(slot);
 
     ws.addEventListener("open", () => {
-      this.reconnectDelays.set(pdsUri, 0);
+      this.reconnectDelays.set(key, 0);
     });
 
     ws.addEventListener("message", async (ev) => {
@@ -159,14 +188,14 @@ export class FirehoseSubscriber {
         // Track the firehose-level seq from EVERY frame so reconnects can
         // resume — even from frames we don't otherwise care about.
         if (typeof frame.seq === "number") {
-          const prev = this.cursorByPds.get(pdsUri) ?? -1;
-          if (frame.seq > prev) this.cursorByPds.set(pdsUri, frame.seq);
+          const prev = this.cursorBySocket.get(key) ?? -1;
+          if (frame.seq > prev) this.cursorBySocket.set(key, frame.seq);
         }
         if (frame.t !== "#commit") return;
         if (!dids.has(frame.repo)) return;
         if (!frame.blocks) return;
 
-        // Skip if all the ops in this commit are deletes; we only care about creates.
+        // Skip if no ops touch our action collection.
         const hasActionOp = (frame.ops || []).some((op) => op.path?.startsWith(ACTION_PATH_PREFIX));
         if (!hasActionOp) return;
 
@@ -183,11 +212,11 @@ export class FirehoseSubscriber {
     ws.addEventListener("close", () => {
       if (this.stopped) return;
       // Exponential backoff: 1s, 2s, 4s, ... capped at 30s.
-      const prev = this.reconnectDelays.get(pdsUri) ?? 0;
+      const prev = this.reconnectDelays.get(key) ?? 0;
       const next = prev === 0 ? 1000 : Math.min(prev * 2, 30_000);
-      this.reconnectDelays.set(pdsUri, next);
+      this.reconnectDelays.set(key, next);
       this.sockets = this.sockets.filter((s) => s !== slot);
-      setTimeout(() => this._openSocket(pdsUri, dids), next);
+      setTimeout(() => this._openSocket({ key, wsBase, dids, wantedDids }), next);
     });
 
     ws.addEventListener("error", () => {
@@ -196,14 +225,14 @@ export class FirehoseSubscriber {
   }
 
   _dispatch(did, seq, makeCbor) {
-    const key = `${did}:${seq}`;
-    if (this.seen.has(key)) return;
-    this.seen.add(key);
+    const dedupKey = `${did}:${seq}`;
+    if (this.seen.has(dedupKey)) return;
+    this.seen.add(dedupKey);
     try {
       const cbor = makeCbor();
       this.onAction(did, seq, cbor);
     } catch (e) {
-      console.warn(`[firehose] dispatch ${key} threw:`, e?.message || e);
+      console.warn(`[firehose] dispatch ${dedupKey} threw:`, e?.message || e);
     }
   }
 

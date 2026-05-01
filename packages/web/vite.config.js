@@ -50,6 +50,15 @@ export default defineConfig({
         // identity resolver. Override with SLINGSHOT_URL.
         const defaultSlingshot = command === "build" ? "https://slingshot.microcosm.blue" : "";
         process.env.VITE_SLINGSHOT_URL = process.env.SLINGSHOT_URL ?? defaultSlingshot;
+
+        // Filtered firehose. In prod we default to firehose.channel, which
+        // accepts wantedDids query params and feeds back only commits from
+        // those repos — so one socket covers all peers and we don't drown
+        // in unrelated network traffic. In dev we leave it empty and fall
+        // back to per-peer subscriptions on the local PDS, which already
+        // has just our demo accounts.
+        const defaultFirehose = command === "build" ? "wss://firehose.channel" : "";
+        process.env.VITE_FIREHOSE_URL = process.env.FIREHOSE_URL ?? defaultFirehose;
       },
     },
     svelte(),

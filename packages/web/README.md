@@ -85,6 +85,11 @@ Environment variables read at build/dev time by `vite.config.js`:
 - `SLINGSHOT_URL` — identity resolver. Default in prod:
   `https://slingshot.microcosm.blue`. In dev, empty (handle/DID lookups
   hit the local PDS via the `/xrpc` proxy).
+- `FIREHOSE_URL` — filtered firehose endpoint that accepts `wantedDids`
+  query params. Default in prod: `wss://firehose.channel`. When set, the
+  client opens one WebSocket and the server filters server-side to just
+  the player DIDs in this hand. When empty (dev), the client falls back
+  to one socket per peer PDS.
 
 ## Tests
 
