@@ -116,6 +116,7 @@ export async function getOrCreateDemoSession() {
     handle: stored.handle,
     name: stored.handle,
     client: buildClient(stored),
+    pdsUri: stored.pdsUri,
     isDemo: true,
   };
 }
@@ -147,6 +148,7 @@ export async function restoreDemoSession() {
     handle: stored.handle,
     name: stored.handle,
     client,
+    pdsUri: stored.pdsUri,
     isDemo: true,
   };
 }

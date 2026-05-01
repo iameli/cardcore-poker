@@ -2,7 +2,7 @@
   "client_id": "https://fairway.iameli.link/oauth-client-metadata.json",
   "client_name": "Cardcore Poker",
   "client_uri": "https://fairway.iameli.link",
-  "redirect_uris": ["https://fairway.iameli.link/oauth-callback"],
+  "redirect_uris": ["https://fairway.iameli.link"],
   "scope": "atproto repo:re.cardco.poker.action repo:re.cardco.poker.table repo:re.cardco.actor.profile",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],

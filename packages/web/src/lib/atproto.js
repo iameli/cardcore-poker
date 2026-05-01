@@ -11,9 +11,39 @@ import {
   getSession,
   deleteStoredSession,
   listStoredSessions,
+  OAuthUserAgent,
 } from "@atcute/oauth-browser-client";
+import { Client } from "@atcute/client";
 
-const SCOPE = "atproto transition:generic";
+/**
+ * Build the unified session shape the rest of the app expects:
+ *   { did, handle, name, client, pdsUri }
+ *
+ * `client` is an authenticated @atcute Client wrapping the OAuth user-agent.
+ * `pdsUri` is the user's PDS endpoint, used by the firehose subscriber.
+ */
+async function buildOAuthSession(rawSession, handle) {
+  const userAgent = new OAuthUserAgent(rawSession);
+  const did = rawSession.info.sub;
+  let pdsUri;
+  try {
+    pdsUri = await resolveDidToPds(did);
+  } catch {
+    pdsUri = undefined;
+  }
+  return {
+    did,
+    handle,
+    name: handle || did,
+    client: new Client({ handler: userAgent }),
+    userAgent,
+    pdsUri,
+  };
+}
+
+// Scope is sourced from public/oauth-client-metadata.json (vite.config.js
+// reads it at build/dev time and forwards it as VITE_OAUTH_SCOPE).
+const SCOPE = import.meta.env.VITE_OAUTH_SCOPE;
 
 /**
  * client_id for development uses a special loopback format that tells the PDS
@@ -34,7 +64,7 @@ const REDIRECT_URI = import.meta.env.DEV
  * Resolve a DID to its Personal Data Server (PDS) endpoint.
  * Handles did:plc (via PLC directory) and did:web (via well-known).
  */
-async function resolveDidToPds(did) {
+export async function resolveDidToPds(did) {
   if (did.startsWith("did:plc:")) {
     const res = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
     if (!res.ok) throw new Error(`PLC directory returned ${res.status}`);
@@ -127,12 +157,16 @@ export async function signIn(handle) {
 }
 
 /**
- * Resolve a DID (or handle) to a handle via Slingshot's cached identity resolver.
+ * Resolve a DID (or handle) to a handle via the configured identity resolver
+ * (Slingshot by default — see VITE_SLINGSHOT_URL). Best-effort: returns ""
+ * on any failure, including when the resolver is unset (dev).
  */
 export async function resolveDidToHandle(did) {
+  const base = import.meta.env.VITE_SLINGSHOT_URL;
+  if (!base) return ""; // no resolver configured (dev — local PDS doesn't expose this)
   try {
     const res = await fetch(
-      `https://slingshot.microcosm.blue/xrpc/blue.microcosm.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
+      `${base}/xrpc/blue.microcosm.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
     );
     if (res.ok) {
       const data = await res.json();
@@ -191,15 +225,8 @@ export async function handleCallback() {
   try {
     const params = new URLSearchParams(window.location.hash.slice(1) || window.location.search);
     const { session } = await finalizeAuthorization(params);
-
     const handle = await resolveDidToHandle(session.info.sub);
-
-    return {
-      did: session.info.sub,
-      handle,
-      name: handle || session.info.sub,
-      session,
-    };
+    return buildOAuthSession(session, handle);
   } catch (err) {
     console.error("OAuth callback failed:", err);
     return null;
@@ -216,12 +243,7 @@ export async function getStoredSession(did) {
     if (did) {
       const session = await getSession(did, { allowStale: true });
       const handle = await resolveDidToHandle(session.info.sub);
-      return {
-        did: session.info.sub,
-        handle,
-        name: handle || session.info.sub,
-        session,
-      };
+      return buildOAuthSession(session, handle);
     }
 
     const sessions = listStoredSessions();

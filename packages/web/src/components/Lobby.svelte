@@ -14,14 +14,14 @@
   });
 
   /**
-   * Resolve a handle to its DID. For demo accounts on the local PDS, the
-   * Vite proxy forwards to com.atproto.identity.resolveHandle. For real
-   * Bluesky handles in production, the same call works against the user's
-   * PDS.
+   * Resolve a handle to its DID. In dev we hit the local PDS via the Vite
+   * /xrpc proxy (so .test demo handles work). In prod we hit the configured
+   * identity resolver (Slingshot by default — see VITE_SLINGSHOT_URL).
    */
   async function resolveHandle(handle) {
     const trimmed = handle.trim().replace(/^@/, "");
-    const url = `/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(trimmed)}`;
+    const base = import.meta.env.VITE_SLINGSHOT_URL || "";
+    const url = `${base}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(trimmed)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Could not resolve handle: ${trimmed}`);
     const data = await res.json();

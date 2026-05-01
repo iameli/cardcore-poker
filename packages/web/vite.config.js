@@ -43,6 +43,13 @@ export default defineConfig({
             `&scope=${encodeURIComponent(metadata.scope)}`;
         }
         process.env.VITE_OAUTH_SCOPE = metadata.scope;
+
+        // Identity resolver. In dev we leave it empty so handle/DID lookups
+        // hit the local PDS via Vite's /xrpc proxy (which knows .test demo
+        // accounts). In prod we default to Slingshot, mary-ext's hosted
+        // identity resolver. Override with SLINGSHOT_URL.
+        const defaultSlingshot = command === "build" ? "https://slingshot.microcosm.blue" : "";
+        process.env.VITE_SLINGSHOT_URL = process.env.SLINGSHOT_URL ?? defaultSlingshot;
       },
     },
     svelte(),

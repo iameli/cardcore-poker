@@ -6,7 +6,8 @@
   import GameLog from "./GameLog.svelte";
   import { initWasm } from "../lib/cardcore-wasm.js";
   import { PlayerSession, generateSeed } from "../lib/game-session.js";
-  import { Publisher, ActionPoller } from "../lib/transport.js";
+  import { Publisher } from "../lib/transport.js";
+  import { FirehoseSubscriber } from "../lib/firehose.js";
   import { LEXICONS } from "../lib/atproto-publisher.js";
   import { GAME_PHASES } from "../lib/poker-engine.js";
 
@@ -33,7 +34,7 @@
 
   let _publisher = null;
   let _session = null;
-  let _poller = null;
+  let _firehose = null;
   let _tableTid = null;
   let _tableCid = null;
   let _handOver = false;
@@ -88,18 +89,25 @@
             tableTid: _tableTid,
             actionCbor: cbor,
           });
-          // Right after we publish, kick the poller in case our publish
-          // unblocks a peer who is now ready to act.
-          _poller?.pollNow();
         },
         onUpdate: refreshUi,
       });
 
-      _poller = new ActionPoller({
+      // Feed the table to our local agent first — that moves it out of Init
+      // and into the CommitSeeds phase, so the firehose backfill (which may
+      // include peer CommitSeeds already on disk) won't be rejected as
+      // out-of-phase. getRecord strips $type; add it back for the lexicon.
+      const tableForCbor = { $type: LEXICONS.TABLE, ...record };
+      const tableCbor = dagCbor.encode(tableForCbor);
+      addLog("Joining table…");
+      await _session.receiveTable(tableCbor);
+
+      const peerDids = playerDids.filter((d) => d !== session.did);
+      _firehose = new FirehoseSubscriber({
         client: session.client,
-        playerDids,
+        peerDids,
         tableUri,
-        selfDid: session.did,
+        ownPdsUri: session.pdsUri,
         onAction: async (did, seq, cbor) => {
           try {
             await _session.receiveAction(cbor);
@@ -108,16 +116,8 @@
           }
         },
       });
-      _poller.start();
-
-      // Feed the table to our local agent (publishes our CommitSeed).
-      // getRecord may strip $type — add it back so the Rust lexicon parser
-      // can dispatch on it.
-      const tableForCbor = { $type: LEXICONS.TABLE, ...record };
-      const tableCbor = dagCbor.encode(tableForCbor);
-      addLog("Joining table…");
-      await _session.receiveTable(tableCbor);
-      addLog("Protocol running");
+      await _firehose.start();
+      addLog("Subscribed to peer firehose — protocol running");
     } catch (e) {
       error = e?.message || String(e);
       console.error(e);
@@ -125,7 +125,7 @@
   });
 
   onDestroy(() => {
-    _poller?.stop();
+    _firehose?.stop();
     _session?.destroy();
   });
 
