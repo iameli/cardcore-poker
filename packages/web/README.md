@@ -71,9 +71,10 @@ localStorage = separate demo identity. Player A enters Player B's handle,
 clicks Create Table, copies the AT URI from the GameRoom header. Player B
 pastes it into "Join Existing." The cryptographic deal runs over the PDS.
 
-In production (`pnpm build`) the OAuth client_id from
-`public/oauth-client-metadata.json` is used; users sign in with their
-real Bluesky handle. The static bundle in `dist/` deploys anywhere.
+In production (`pnpm build`) the OAuth metadata is generated from
+`oauth-client-metadata.template.json` and emitted into `dist/` as
+`oauth-client-metadata.json`; users sign in with their real Bluesky
+handle. The static bundle in `dist/` deploys anywhere.
 
 ## Configuration
 
@@ -82,6 +83,12 @@ Environment variables read at build/dev time by `vite.config.js`:
 - `PDS_PORT` — default `2583`
 - `VITE_PORT` — default `5173`
 - `VITE_HOST` — extra allowed dev-server host
+- `OAUTH_HOST` — replaces `cardco.re` in every URL field of the generated
+  `oauth-client-metadata.json` (and the `client_id` / `redirect_uri` baked
+  into the bundle), so a build can be served through an HTTPS reverse
+  proxy on a different host. Example: `OAUTH_HOST=fairway.iameli.link pnpm build`.
+  The same override applies in `pnpm dev` via a dev-server middleware.
+  The template at `oauth-client-metadata.template.json` is unmodified.
 - `SLINGSHOT_URL` — identity resolver. Default in prod:
   `https://slingshot.microcosm.blue`. In dev, empty (handle/DID lookups
   hit the local PDS via the `/xrpc` proxy).

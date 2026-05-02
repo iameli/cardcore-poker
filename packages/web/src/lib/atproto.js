@@ -41,7 +41,7 @@ async function buildOAuthSession(rawSession, handle) {
   };
 }
 
-// Scope is sourced from public/oauth-client-metadata.json (vite.config.js
+// Scope is sourced from oauth-client-metadata.template.json (vite.config.js
 // reads it at build/dev time and forwards it as VITE_OAUTH_SCOPE).
 const SCOPE = import.meta.env.VITE_OAUTH_SCOPE;
 

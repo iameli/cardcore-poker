@@ -1,6 +1,19 @@
+# Hostname override for `just build-web`. Bakes into the OAuth client_id and
+# the generated oauth-client-metadata.json so a build can be served behind
+# an HTTPS reverse proxy on a different host. Override at invocation time:
+#   just HOSTNAME=art.iameli.link build-web
+#   HOSTNAME=art.iameli.link just build-web
+HOSTNAME := env_var_or_default("HOSTNAME", "")
+
 # Build the library
 build:
     cargo build
+
+# Build the web app from a cold checkout. Produces packages/web/dist/.
+# Set HOSTNAME to swap the OAuth host away from cardco.re (see comment above).
+build-web: build-wasm
+    pnpm install --frozen-lockfile
+    OAUTH_HOST="{{HOSTNAME}}" pnpm --filter @cardcore/web build
 
 # Build in release mode
 build-release:
