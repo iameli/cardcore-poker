@@ -31,23 +31,55 @@
   // Sprite row per seat position: top=row0(down), right=row1(left), left=row2(right), bottom=row3(up)
   const SPRITE_ROWS = { top: 0, right: 1, left: 2, bottom: 3 };
 
-  // Build a lookup: table seat index → { id, player }
-  const seatMap = $derived(
-    Object.fromEntries(Object.entries(players).map(([id, p]) => [p.seat, { id, player: p }])),
-  );
+  // The 8 visual slots in clockwise order, starting at bottom-middle (where
+  // the local player always sits). We rotate `playerOrder` so the local
+  // player lands at SLOTS_CW[0], then spread the remaining players across
+  // the remaining slots so they're roughly equidistant on the table.
+  //   slots:    5 (bottom-mid) ← us
+  //             4 (bottom-left)
+  //             7 (left)
+  //             0 (top-left)
+  //             1 (top-mid)
+  //             2 (top-right)
+  //             3 (right)
+  //             6 (bottom-right)
+  const SLOTS_CW = [5, 4, 7, 0, 1, 2, 3, 6];
+  const SLOT_POSITION = {
+    0: "top",
+    1: "top",
+    2: "top",
+    3: "right",
+    4: "bottom",
+    5: "bottom",
+    6: "bottom",
+    7: "left",
+  };
 
-  function seat(i, position) {
-    const entry = seatMap[i];
-    const pid = entry?.id || null;
-    const p = entry?.player || null;
-    const did = pid ? playerDids[pid] || p?.did || null : null;
+  // visual slot 0..7 → DID of the player sitting there (or null)
+  const slotAssignments = $derived.by(() => {
+    const slots = new Array(8).fill(null);
+    const N = playerOrder.length;
+    if (N === 0) return slots;
+    let myIdx = playerOrder.indexOf(ourPlayerId);
+    if (myIdx < 0) myIdx = 0;
+    for (let i = 0; i < N; i++) {
+      const rel = (i - myIdx + N) % N;
+      const cwIdx = Math.round((rel * 8) / N) % 8;
+      slots[SLOTS_CW[cwIdx]] = playerOrder[i];
+    }
+    return slots;
+  });
+
+  function slotProps(slotIdx) {
+    const did = slotAssignments[slotIdx];
+    const p = did ? players[did] : null;
     const handle = did ? handleMap[did] || null : null;
-    const displayPlayer = p ? { ...p, name: handle || p.name } : null;
+    const position = SLOT_POSITION[slotIdx];
     return {
-      id: pid,
-      player: displayPlayer,
+      id: did,
+      player: p ? { ...p, name: handle || p.name } : null,
       did,
-      hole: pid ? holeCards[pid] || [] : [],
+      hole: did ? holeCards[did] || [] : [],
       spriteRow: SPRITE_ROWS[position] ?? 0,
     };
   }
@@ -57,7 +89,7 @@
   <div class="table-layout">
     <!-- Top row seats -->
     {#each [0, 1, 2] as i}
-      {@const s = seat(i, "top")}
+      {@const s = slotProps(i)}
       <div class="seat-area top">
         <PlayerSeat
           player={s.player}
@@ -74,7 +106,7 @@
 
     <!-- Left seat -->
     {#if true}
-      {@const left = seat(7, "left")}
+      {@const left = slotProps(7)}
       <div class="seat-area left">
         <PlayerSeat
           player={left.player}
@@ -114,7 +146,7 @@
 
     <!-- Right seat -->
     {#if true}
-      {@const right = seat(3, "right")}
+      {@const right = slotProps(3)}
       <div class="seat-area right">
         <PlayerSeat
           player={right.player}
@@ -131,7 +163,7 @@
 
     <!-- Bottom row seats -->
     {#each [4, 5, 6] as i}
-      {@const s = seat(i, "bottom")}
+      {@const s = slotProps(i)}
       <div class="seat-area bottom">
         <PlayerSeat
           player={s.player}
