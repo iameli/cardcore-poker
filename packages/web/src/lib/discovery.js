@@ -2,21 +2,26 @@
  * Join-request discovery for the open-room lobby.
  *
  * When a host opens a room they don't know who will ask to join, so they can't
- * filter a firehose by `wantedDids`. Instead the host subscribes to the FULL
- * unfiltered firehose (`com.atproto.sync.subscribeRepos` with no `wantedDids`)
- * and watches for `re.cardco.poker.table` records published at *their* table's
- * rkey by *other* repos — each such record is a join request listing
- * `[host, …, joiner]`.
+ * filter a firehose by `wantedDids`. Instead the host watches the firehose for
+ * `re.cardco.poker.table` records published at *their* table's rkey by *other*
+ * repos — each such record is a join request listing `[host, …, joiner]`.
  *
  * Endpoint:
- *  - **prod**: `VITE_RELAY_URL` (the network relay, e.g. wss://bsky.network),
- *    which streams the whole network so joiners on any PDS are visible.
- *  - **dev**:  the host's own PDS (`ownPdsUri`) — the local dev PDS hosts all
- *    our demo accounts, so its firehose already includes every joiner.
+ *  - **prod**: `VITE_FIREHOSE_URL` (our filtered firehose service) with
+ *    `wantedCollections=re.cardco.poker.table` — the service streams only
+ *    poker-table commits from across the network. Pulling the unfiltered
+ *    firehose into a browser is infeasible on real-world connections.
+ *  - **dev**:  the host's own PDS (`ownPdsUri`), unfiltered — the local dev
+ *    PDS hosts only our demo accounts, so the stream is tiny. (A stock PDS
+ *    doesn't know the wantedCollections param.)
+ *
+ * Missed events are not fatal: joiners re-publish their request with a bumped
+ * `updatedAt` every few seconds while they wait, so a host that connected
+ * late (or dropped the socket) discovers them on the next bump.
  *
  * This runs ONLY in the lobby. The watcher is stopped the moment the host
- * starts the hand (RoomLobby unmounts) — we don't carry the full firehose into
- * gameplay, which subscribes to the filtered (wantedDids) firehose in GameRoom.
+ * starts the hand (RoomLobby unmounts) — gameplay subscribes to the
+ * wantedDids-filtered firehose in GameRoom.
  */
 import { decodeMultiple } from "cbor-x";
 import { CarReader } from "@ipld/car";
@@ -72,11 +77,15 @@ export class JoinRequestWatcher {
   }
 
   start() {
-    // Prod: the network relay (whole-network firehose). Dev: our own PDS, which
-    // hosts every demo account. Either way it's the unfiltered subscribeRepos
-    // stream — the host doesn't know joiner DIDs up front, so it can't filter.
-    const base = import.meta.env.VITE_RELAY_URL || this.ownPdsUri;
-    this._connect(base);
+    // Prod: our filtered firehose service, asked for ONLY poker-table commits
+    // via wantedCollections. Dev fallback: the local PDS, unfiltered (a stock
+    // PDS doesn't support the param, and its stream is just our demo accounts).
+    const filtered = import.meta.env.VITE_FIREHOSE_URL;
+    if (filtered) {
+      this._connect(filtered, `?wantedCollections=${encodeURIComponent(LEXICONS.TABLE)}`);
+    } else {
+      this._connect(this.ownPdsUri, "");
+    }
   }
 
   stop() {
@@ -114,9 +123,9 @@ export class JoinRequestWatcher {
     }, next);
   }
 
-  _connect(base) {
+  _connect(base, query) {
     if (this.stopped) return;
-    const url = `${originToWs(base)}/xrpc/com.atproto.sync.subscribeRepos`;
+    const url = `${originToWs(base)}/xrpc/com.atproto.sync.subscribeRepos${query}`;
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
@@ -143,7 +152,7 @@ export class JoinRequestWatcher {
       }
     });
 
-    ws.addEventListener("close", () => this._reconnect(() => this._connect(base)));
+    ws.addEventListener("close", () => this._reconnect(() => this._connect(base, query)));
     ws.addEventListener("error", () => {
       /* close handler retries */
     });

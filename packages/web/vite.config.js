@@ -71,21 +71,13 @@ export default defineConfig({
         process.env.VITE_SLINGSHOT_URL = process.env.SLINGSHOT_URL ?? defaultSlingshot;
 
         // Filtered firehose. In prod we default to firehose.channel, which
-        // accepts wantedDids query params and feeds back only commits from
-        // those repos — so one socket covers all peers and we don't drown
-        // in unrelated network traffic. In dev we leave it empty and fall
-        // back to per-peer subscriptions on the local PDS, which already
-        // has just our demo accounts.
+        // accepts wantedDids (gameplay: only our peers' commits) and
+        // wantedCollections (lobby discovery: only re.cardco.poker.table
+        // commits) query params — so one socket never drowns in unrelated
+        // network traffic. In dev we leave it empty and fall back to the
+        // local PDS, which already has just our demo accounts.
         const defaultFirehose = command === "build" ? "wss://firehose.channel" : "";
         process.env.VITE_FIREHOSE_URL = process.env.FIREHOSE_URL ?? defaultFirehose;
-
-        // Full firehose relay — the open-room HOST subscribes to the unfiltered
-        // firehose (subscribeRepos, no wantedDids) to discover join requests,
-        // since it doesn't know joiner DIDs up front. Only used in the lobby;
-        // gameplay uses the filtered firehose above. In dev we leave it empty
-        // and fall back to the local PDS, which hosts all our demo accounts.
-        const defaultRelay = command === "build" ? "wss://bsky.network" : "";
-        process.env.VITE_RELAY_URL = process.env.RELAY_URL ?? defaultRelay;
       },
       configureServer(server) {
         // Serve the (possibly rewritten) metadata in dev too. Dev OAuth uses
