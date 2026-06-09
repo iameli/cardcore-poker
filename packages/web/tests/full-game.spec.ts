@@ -1,4 +1,5 @@
-import { test, expect, Page, Browser } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
+import { demoSignIn, freshContext, startOpenRoomGame } from "./helpers";
 
 /**
  * E2E multi-hand test: two demo players play a full game across several hands
@@ -12,30 +13,6 @@ import { test, expect, Page, Browser } from "@playwright/test";
  * Strategy: play the first hand passively (check/call) so nobody busts — this
  * forces a continuation to a second hand — then go all-in to end the game fast.
  */
-
-async function demoSignIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: /Play in Demo Mode/i }).click();
-  await expect(page.getByRole("heading", { name: /^Lobby$/i })).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-async function readHandle(page: Page): Promise<string> {
-  const text = await page.locator(".name").first().innerText();
-  return text.trim();
-}
-
-async function freshContext(browser: Browser) {
-  const ctx = await browser.newContext();
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
-  const page = await ctx.newPage();
-  return { ctx, page };
-}
 
 async function clickIfVisible(page: Page, rx: RegExp): Promise<boolean> {
   const btn = page.getByRole("button", { name: rx }).first();
@@ -76,24 +53,7 @@ test.describe("full game (PDS-only)", () => {
     }
 
     await Promise.all([demoSignIn(a.page), demoSignIn(b.page)]);
-
-    const handleB = await readHandle(b.page);
-    await a.page.getByTestId("opponent-handle").fill(handleB);
-    await a.page.getByTestId("create-table").click();
-
-    // A is in the GameRoom; reconstruct the table URI and have B join.
-    await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
-      .trim()
-      .split("/")
-      .pop()!;
-    const didA = await a.page.evaluate(
-      () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
-    );
-    const tableUri = `at://${didA}/re.cardco.poker.table/${tid.trim()}`;
-    await b.page.getByTestId("join-uri").fill(tableUri);
-    await b.page.getByTestId("join-table").click();
-    await expect(b.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
+    await startOpenRoomGame(a, b);
 
     const pages = [a.page, b.page];
     let aggressive = false;

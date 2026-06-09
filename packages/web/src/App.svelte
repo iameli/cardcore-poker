@@ -142,14 +142,17 @@
         } catch (err) {
           console.warn("OAuth session restore failed:", err);
         }
-        try {
-          const s = await restoreDemoSession();
-          if (s) {
-            routeAfterAuth(s);
-            return;
+        // Demo sessions are a dev-only convenience — never restore one in prod.
+        if (import.meta.env.DEV) {
+          try {
+            const s = await restoreDemoSession();
+            if (s) {
+              routeAfterAuth(s);
+              return;
+            }
+          } catch (err) {
+            console.warn("Demo session restore failed:", err);
           }
-        } catch (err) {
-          console.warn("Demo session restore failed:", err);
         }
         // No session anywhere — now we know it's time to sign in.
         page = "signin";
@@ -183,12 +186,6 @@
     window.history.replaceState({}, "", "/");
   }
 
-  function onJoinTable(uri) {
-    tableUri = uri;
-    page = "game";
-    window.history.pushState({}, "", `/${uri}`);
-  }
-
   function onLeaveTable() {
     tableUri = null;
     page = "lobby";
@@ -219,7 +216,7 @@
   {:else if page === "signin"}
     <SignIn {onSignIn} />
   {:else if page === "lobby"}
-    <Lobby {session} {onJoinTable} {onCreateRoom} {onSignOut} />
+    <Lobby {session} {onCreateRoom} {onSignOut} />
   {:else if page === "roomLobby"}
     <RoomLobby {session} uri={roomUri} {onStartGame} {onLeaveRoom} />
   {:else if page === "game"}

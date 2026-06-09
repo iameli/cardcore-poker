@@ -1,4 +1,5 @@
-import { test, expect, Page, Browser } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { demoSignIn, freshContext, startOpenRoomGame } from "./helpers";
 
 /**
  * E2E spectator test: two demo players start a game; a third demo account —
@@ -6,30 +7,6 @@ import { test, expect, Page, Browser } from "@playwright/test";
  * replays the whole game from the players' PDS records: it follows the
  * protocol phases, never gets action buttons, and sees the showdown.
  */
-
-async function demoSignIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: /Play in Demo Mode/i }).click();
-  await expect(page.getByRole("heading", { name: /^Lobby$/i })).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-async function readHandle(page: Page): Promise<string> {
-  const text = await page.locator(".name").first().innerText();
-  return text.trim();
-}
-
-async function freshContext(browser: Browser) {
-  const ctx = await browser.newContext();
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
-  const page = await ctx.newPage();
-  return { ctx, page };
-}
 
 const ACTION_RX = /^(FOLD|CHECK|CALL|RAISE|ALL IN)$/;
 
@@ -52,22 +29,8 @@ test.describe("spectator (PDS-only)", () => {
 
     await Promise.all([demoSignIn(a.page), demoSignIn(b.page), demoSignIn(c.page)]);
 
-    // A and B start a game via the invite flow.
-    const handleB = await readHandle(b.page);
-    await a.page.getByTestId("opponent-handle").fill(handleB);
-    await a.page.getByTestId("create-table").click();
-    await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
-      .trim()
-      .split("/")
-      .pop()!;
-    const didA = await a.page.evaluate(
-      () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
-    );
-    const tableUri = `at://${didA}/re.cardco.poker.table/${tid.trim()}`;
-    await b.page.getByTestId("join-uri").fill(tableUri);
-    await b.page.getByTestId("join-table").click();
-    await expect(b.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
+    // A and B start a game.
+    const tableUri = await startOpenRoomGame(a, b);
 
     // C opens the game's URL and lands in the GameRoom as a spectator.
     await c.page.goto(`/${tableUri}`);

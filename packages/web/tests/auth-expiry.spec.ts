@@ -1,29 +1,11 @@
-import { test, expect, Page, Browser } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { demoSignIn, freshContext } from "./helpers";
 
 /**
  * E2E auth-expiry test: when the PDS rejects our token (401 invalid_token,
  * e.g. an expired OAuth session), the app bounces the user to the sign-in
  * screen and — after they re-authenticate — returns them to where they were.
  */
-
-async function demoSignIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: /Play in Demo Mode/i }).click();
-  await expect(page.getByRole("heading", { name: /^Lobby$/i })).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-async function freshContext(browser: Browser) {
-  const ctx = await browser.newContext();
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
-  const page = await ctx.newPage();
-  return { ctx, page };
-}
 
 test.describe("auth expiry (PDS-only)", () => {
   test("401 bounces to sign-in and returns the user afterwards", async ({ browser }) => {

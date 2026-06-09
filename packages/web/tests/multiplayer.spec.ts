@@ -1,36 +1,12 @@
-import { test, expect, Page, Browser } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
+import { demoSignIn, freshContext, readHandle, startOpenRoomGame } from "./helpers";
 
 /**
  * E2E multiplayer test: two browser contexts each create a real account on
- * the local PDS, one creates a table referencing the other's handle, the
- * other joins via the table's AT URI. Validates that the cryptographic
- * dealing protocol completes via PDS-only transport (no relay server).
+ * the local PDS and play a hand together via the open-room flow. Validates
+ * that the cryptographic dealing protocol completes via PDS-only transport
+ * (no relay server), plus assorted in-game UI behaviors.
  */
-
-async function demoSignIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: /Play in Demo Mode/i }).click();
-  await expect(page.getByRole("heading", { name: /^Lobby$/i })).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-async function readHandle(page: Page): Promise<string> {
-  const text = await page.locator(".name").first().innerText();
-  return text.trim();
-}
-
-async function freshContext(browser: Browser) {
-  const ctx = await browser.newContext();
-  // Pre-unlock the soft-launch gate so each context skips the password screen.
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
-  const page = await ctx.newPage();
-  return { ctx, page };
-}
 
 const ACTION_RX = /^(FOLD|CHECK|CALL|RAISE|ALL IN)$/;
 
@@ -60,38 +36,20 @@ test.describe("multiplayer (PDS-only)", () => {
     expect(handleA).not.toBe(handleB);
     console.log(`A=${handleA}  B=${handleB}`);
 
-    // A creates a table that includes B
-    await a.page.getByTestId("opponent-handle").fill(handleB);
-    await a.page.getByTestId("create-table").click();
-
-    // After create, A is in GameRoom; pull the table URI from the share button
-    await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tableTid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
-      .trim()
-      .split("/")
-      .pop()!;
-    // Reconstruct the URI from A's DID and the tid
-    const didA = await a.page.evaluate(
-      () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
-    );
-    const tableUri = `at://${didA}/re.cardco.poker.table/${tableTid}`;
+    const tableUri = await startOpenRoomGame(a, b);
     console.log(`tableUri=${tableUri}`);
-
-    // The copy button puts the FULL shareable URL on the clipboard — ready to
-    // paste into a browser — while displaying host/tid.
-    await a.ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await a.page.getByTestId("copy-table-uri").click();
-    const copiedUrl = await a.page.evaluate(() => navigator.clipboard.readText());
-    expect(copiedUrl).toBe(`${new URL(a.page.url()).origin}/${tableUri}`);
-
-    // B joins via the URI
-    await b.page.getByTestId("join-uri").fill(tableUri);
-    await b.page.getByTestId("join-table").click();
-    await expect(b.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
 
     // The table URL persists for the whole game on both sides.
     await expect(a.page).toHaveURL(/\/at:\/\//);
     await expect(b.page).toHaveURL(/\/at:\/\//);
+
+    // The header copy button shows host/tid and puts the FULL shareable URL
+    // on the clipboard — ready to paste into a browser.
+    await a.ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await expect(a.page.getByTestId("copy-table-uri").locator("code")).toContainText("/");
+    await a.page.getByTestId("copy-table-uri").click();
+    const copiedUrl = await a.page.evaluate(() => navigator.clipboard.readText());
+    expect(copiedUrl).toBe(`${new URL(a.page.url()).origin}/${tableUri}`);
 
     // The cryptographic deal runs over the PDS. One player's UI eventually
     // surfaces an action button when it's their turn.

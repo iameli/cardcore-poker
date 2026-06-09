@@ -2,62 +2,14 @@
   import { initWasm } from "../lib/cardcore-wasm.js";
   import { Publisher } from "../lib/transport.js";
 
-  let { session, onJoinTable, onSignOut, onCreateRoom = null } = $props();
+  let { session, onSignOut, onCreateRoom } = $props();
 
-  let opponentHandle = $state("");
-  let joinUri = $state("");
   let creating = $state(false);
   let error = $state("");
 
   $effect(() => {
     initWasm().catch(() => {});
   });
-
-  /**
-   * Resolve a handle to its DID. In dev we hit the local PDS via the Vite
-   * /xrpc proxy (so .test demo handles work). In prod we hit the configured
-   * identity resolver (Slingshot by default — see VITE_SLINGSHOT_URL).
-   */
-  async function resolveHandle(handle) {
-    const trimmed = handle.trim().replace(/^@/, "");
-    const base = import.meta.env.VITE_SLINGSHOT_URL || "";
-    const url = `${base}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(trimmed)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Could not resolve handle: ${trimmed}`);
-    const data = await res.json();
-    return data.did;
-  }
-
-  async function createTable() {
-    if (!opponentHandle.trim()) {
-      error = "Enter your opponent's handle";
-      return;
-    }
-    if (!session?.client) {
-      error = "Sign in first";
-      return;
-    }
-    creating = true;
-    error = "";
-    try {
-      const opponentDid = await resolveHandle(opponentHandle);
-      if (opponentDid === session.did) {
-        error = "Pick a different player";
-        return;
-      }
-      const publisher = new Publisher({ client: session.client, did: session.did });
-      const result = await publisher.createTable({
-        players: [session.did, opponentDid],
-        startingChips: 1000,
-        smallBlind: 10,
-      });
-      onJoinTable(result.uri);
-    } catch (e) {
-      error = e?.message || String(e);
-    } finally {
-      creating = false;
-    }
-  }
 
   async function createOpenRoom() {
     if (!session?.client) {
@@ -81,15 +33,6 @@
     }
   }
 
-  function joinTable() {
-    const uri = joinUri.trim();
-    if (!uri.startsWith("at://")) {
-      error = "Paste an at:// URI";
-      return;
-    }
-    onJoinTable(uri);
-  }
-
   const playerName = $derived(session?.handle || session?.name || "Player");
 </script>
 
@@ -108,30 +51,6 @@
     <h2>Lobby</h2>
 
     <section class="card">
-      <h3>Invite a Specific Player</h3>
-      <p class="hint">Enter the handle of the player you want to play with.</p>
-      <div class="join-row">
-        <input
-          type="text"
-          placeholder="opponent.bsky.social"
-          bind:value={opponentHandle}
-          disabled={creating}
-          data-testid="opponent-handle"
-        />
-        <button
-          class="btn primary"
-          onclick={createTable}
-          disabled={creating}
-          data-testid="create-table"
-        >
-          {creating ? "Creating…" : "Create Table"}
-        </button>
-      </div>
-    </section>
-
-    <div class="divider"><span>or</span></div>
-
-    <section class="card">
       <h3>Create Open Room</h3>
       <p class="hint">Create a room and share the link with others to play.</p>
       <button
@@ -142,23 +61,6 @@
       >
         {creating ? "Creating…" : "Create Open Room"}
       </button>
-    </section>
-
-    <div class="divider"><span>or</span></div>
-
-    <section class="card">
-      <h3>Join an Existing Table</h3>
-      <p class="hint">Paste the table's AT URI (the creator shares it with you).</p>
-      <div class="join-row">
-        <input
-          type="text"
-          placeholder="at://did:plc:.../re.cardco.poker.table/..."
-          bind:value={joinUri}
-          onkeydown={(e) => e.key === "Enter" && joinTable()}
-          data-testid="join-uri"
-        />
-        <button class="btn secondary" onclick={joinTable} data-testid="join-table">Join</button>
-      </div>
     </section>
 
     {#if error}
@@ -261,10 +163,6 @@
     background: #c0392b;
     color: #ffffff;
   }
-  .secondary {
-    background: #1a1a1a;
-    color: #ffffff;
-  }
   .logout {
     font-size: 0.4rem;
     padding: 0.4rem 0.8rem;
@@ -272,42 +170,6 @@
   .logout:hover {
     background: #c0392b;
     color: #ffffff;
-  }
-  .join-row {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .join-row input {
-    flex: 1;
-    padding: 0.7rem;
-    border: 2px solid #1a1a1a;
-    border-radius: 0;
-    background: #ffffff;
-    color: #1a1a1a;
-    font-family: inherit;
-    font-size: 0.42rem;
-    outline: none;
-  }
-  .join-row input:focus {
-    border-color: #c0392b;
-    box-shadow: 3px 3px 0 #c0392b;
-  }
-  .divider {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .divider::before,
-  .divider::after {
-    content: "";
-    flex: 1;
-    height: 2px;
-    background: #1a1a1a;
-  }
-  .divider span {
-    font-size: 0.4rem;
-    color: #1a1a1a;
-    opacity: 0.6;
   }
   .error {
     color: #c0392b;

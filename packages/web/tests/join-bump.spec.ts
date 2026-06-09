@@ -1,4 +1,5 @@
-import { test, expect, Page, Browser } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { demoSignIn, freshContext } from "./helpers";
 
 /**
  * E2E join-request bump test: discovery is a live stream with no backfill, so
@@ -9,25 +10,6 @@ import { test, expect, Page, Browser } from "@playwright/test";
  * Here the host RELOADS after the joiner's request was published — the
  * restarted watcher missed it — and discovery still happens on the next bump.
  */
-
-async function demoSignIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: /Play in Demo Mode/i }).click();
-  await expect(page.getByRole("heading", { name: /^Lobby$/i })).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-async function freshContext(browser: Browser) {
-  const ctx = await browser.newContext();
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
-  const page = await ctx.newPage();
-  return { ctx, page };
-}
 
 test.describe("join-request bump (PDS-only)", () => {
   test("a host that missed the join request discovers it via the bump", async ({ browser }) => {
