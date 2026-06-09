@@ -284,3 +284,140 @@ fn unwrap_actions(output: AgentOutput) -> Vec<Vec<u8>> {
         other => panic!("expected Actions, got {:?}", other),
     }
 }
+
+/// Three players; one busts in hand 1; hand 2 plays to completion WITHOUT the
+/// busted agent ever being fed another action (as if they closed their tab).
+/// This is the busted-player resilience guarantee: dead seats leave the
+/// shuffle/lock/reveal protocol entirely.
+#[test]
+fn game_continues_without_busted_player() {
+    let dids = ["did:plc:p0", "did:plc:p1", "did:plc:p2"];
+    let mut agents: Vec<PlayerAgent> = dids
+        .iter()
+        .enumerate()
+        .map(|(i, d)| PlayerAgent::new(d, format!("bust_seed_{}", i).as_bytes()).unwrap())
+        .collect();
+    let table_cbor = make_table_cbor(&dids, 1000, 10);
+
+    fn broadcast(queues: &mut [Vec<Vec<u8>>], active: &[usize], from: usize, actions: &[Vec<u8>]) {
+        for &i in active {
+            if i != from {
+                queues[i].extend(actions.iter().cloned());
+            }
+        }
+    }
+
+    /// Pump messages + scripted bets until every active agent is Complete.
+    fn run_hand(
+        agents: &mut [PlayerAgent],
+        queues: &mut [Vec<Vec<u8>>],
+        active: &[usize],
+        mut pick: impl FnMut(usize, &[BetAction]) -> BetAction,
+    ) {
+        let mut bets_made = 0usize;
+        for _ in 0..5000 {
+            let mut progress = false;
+            for &i in active {
+                let queue = std::mem::take(&mut queues[i]);
+                for action in &queue {
+                    if let AgentOutput::Actions(out) = agents[i].receive_action(action).unwrap() {
+                        broadcast(queues, active, i, &out);
+                    }
+                    progress = true;
+                }
+            }
+            if active
+                .iter()
+                .all(|&i| matches!(agents[i].phase(), Phase::Complete))
+            {
+                return;
+            }
+            if !progress {
+                let mut bet_done = false;
+                for &i in active {
+                    if let AgentOutput::NeedBet { options } =
+                        agents[i].auto_respond_if_needed().unwrap()
+                    {
+                        let bet = pick(bets_made, &options);
+                        bets_made += 1;
+                        if let AgentOutput::Actions(out) = agents[i].bet(bet).unwrap() {
+                            broadcast(queues, active, i, &out);
+                        }
+                        bet_done = true;
+                        break;
+                    }
+                }
+                if !bet_done {
+                    panic!(
+                        "hand stalled; phases: {:?}",
+                        active
+                            .iter()
+                            .map(|&i| format!("{:?}", agents[i].phase()))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        panic!("hand exceeded max iterations");
+    }
+
+    // Hand 1: everyone at the table; first bettor shoves, second folds, third
+    // calls — the all-in loser busts (deterministic deal from fixed seeds).
+    let mut queues: Vec<Vec<Vec<u8>>> = vec![vec![]; 3];
+    let everyone = [0usize, 1, 2];
+    for i in 0..3 {
+        let out = agents[i].receive_table(&table_cbor).unwrap();
+        if let AgentOutput::Actions(a) = out {
+            broadcast(&mut queues, &everyone, i, &a);
+        }
+    }
+    run_hand(&mut agents, &mut queues, &everyone, |n, options| match n {
+        0 => BetAction::AllIn,
+        1 => BetAction::Fold,
+        _ => {
+            if options.iter().any(|o| matches!(o, BetAction::Call)) {
+                BetAction::Call
+            } else if options.iter().any(|o| matches!(o, BetAction::Check)) {
+                BetAction::Check
+            } else {
+                BetAction::AllIn
+            }
+        }
+    });
+
+    // Find who busted (the all-in pot can't tie with these seeds).
+    let gs: serde_json::Value = serde_json::from_str(&agents[0].game_state_json()).unwrap();
+    let chips: Vec<u64> = gs["players"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["chips"].as_u64().unwrap())
+        .collect();
+    let busted = chips
+        .iter()
+        .position(|&c| c == 0)
+        .expect("expected a busted player (re-pick seeds if the pot tied)");
+    let survivors: Vec<usize> = (0..3).filter(|&i| i != busted).collect();
+    assert!(!agents[0].game_over(), "two survivors should keep playing");
+
+    // Hand 2: the busted player's tab is CLOSED — their agent is never fed
+    // again, and the survivors' agents must not need anything from it.
+    for &i in &survivors {
+        let out = agents[i].next_hand().unwrap();
+        if let AgentOutput::Actions(a) = out {
+            broadcast(&mut queues, &survivors, i, &a);
+        }
+    }
+    run_hand(&mut agents, &mut queues, &survivors, |_, options| {
+        if options.iter().any(|o| matches!(o, BetAction::Check)) {
+            BetAction::Check
+        } else {
+            BetAction::Call
+        }
+    });
+
+    for &i in &survivors {
+        assert!(matches!(agents[i].phase(), Phase::Complete));
+        assert_eq!(agents[i].hole_cards().len(), 2);
+    }
+}

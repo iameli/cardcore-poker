@@ -230,15 +230,27 @@ impl ProtocolState {
                     commitment,
                 },
             ) => {
+                if self.game.players[*player_id].eliminated {
+                    return Err(crate::Error::InvalidAction(
+                        "eliminated players don't participate in the protocol".into(),
+                    ));
+                }
                 if self.seed_commitments[*player_id].is_some() {
                     return Err(crate::Error::InvalidAction("already committed".into()));
                 }
                 self.seed_commitments[*player_id] = Some(*commitment);
-                if self.seed_commitments.iter().all(|c| c.is_some()) {
+                let all_live_committed = self
+                    .seed_commitments
+                    .iter()
+                    .enumerate()
+                    .all(|(i, c)| self.game.players[i].eliminated || c.is_some());
+                if all_live_committed {
                     // Seeds committed — go straight to shuffle (no reveal yet)
                     let card_points = crypto::card_points()?;
                     self.game.deck = card_points.into_iter().map(|(_, p)| p).collect();
-                    self.phase = Phase::Shuffle { next_player: 0 };
+                    self.phase = Phase::Shuffle {
+                        next_player: self.live_seats()[0],
+                    };
                 }
                 Ok(())
             }
@@ -258,11 +270,15 @@ impl ProtocolState {
                 self.game.deck = deck.clone();
                 self.shuffles_done += 1;
 
-                if self.shuffles_done >= self.game.num_players() {
-                    self.phase = Phase::Lock { next_player: 0 };
+                // Only live players shuffle; busted seats are skipped entirely.
+                let live = self.live_seats();
+                if self.shuffles_done >= live.len() {
+                    self.phase = Phase::Lock {
+                        next_player: live[0],
+                    };
                 } else {
                     self.phase = Phase::Shuffle {
-                        next_player: self.shuffles_done,
+                        next_player: live[self.shuffles_done],
                     };
                 }
                 Ok(())
@@ -281,12 +297,13 @@ impl ProtocolState {
                 self.game.deck = deck.clone();
                 self.locks_done += 1;
 
-                if self.locks_done >= self.game.num_players() {
+                let live = self.live_seats();
+                if self.locks_done >= live.len() {
                     self.game.post_blinds();
                     self.start_dealing_hole_cards();
                 } else {
                     self.phase = Phase::Lock {
-                        next_player: self.locks_done,
+                        next_player: live[self.locks_done],
                     };
                 }
                 Ok(())
@@ -316,15 +333,25 @@ impl ProtocolState {
                         "recipient doesn't reveal for their own card".into(),
                     ));
                 }
+                if self.game.players[*player_id].eliminated {
+                    // An eliminated player never locked this deck — their
+                    // scalar would corrupt the decryption.
+                    return Err(crate::Error::InvalidAction(
+                        "eliminated players don't participate in the protocol".into(),
+                    ));
+                }
                 if self.deal_reveals.contains_key(player_id) {
                     return Err(crate::Error::InvalidAction("already revealed".into()));
                 }
 
                 self.deal_reveals.insert(*player_id, scalar.clone());
 
+                // Only live players locked the deck, so only their reveals are
+                // needed (minus the recipient, for hole cards).
+                let live_count = self.live_seats().len();
                 let reveals_needed = match deal_type {
-                    DealType::HoleCard { .. } => self.game.num_players() - 1,
-                    DealType::CommunityCard { .. } => self.game.num_players(),
+                    DealType::HoleCard { .. } => live_count - 1,
+                    DealType::CommunityCard { .. } => live_count,
                 };
 
                 if self.deal_reveals.len() >= reveals_needed {
@@ -424,6 +451,14 @@ impl ProtocolState {
         }
     }
 
+    /// Seats still in the game, in seat order. These are the only players who
+    /// participate in the cryptographic protocol (commit/shuffle/lock/reveal).
+    fn live_seats(&self) -> Vec<usize> {
+        (0..self.game.num_players())
+            .filter(|&i| !self.game.players[i].eliminated)
+            .collect()
+    }
+
     pub fn valid_actions(&self) -> Vec<ValidAction> {
         match &self.phase {
             Phase::Init => vec![], // Table action is handled externally
@@ -431,7 +466,7 @@ impl ProtocolState {
                 .seed_commitments
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.is_none())
+                .filter(|(pid, c)| c.is_none() && !self.game.players[*pid].eliminated)
                 .map(|(pid, _)| ValidAction {
                     player_id: pid,
                     kind: ValidActionKind::CommitSeed,
@@ -453,7 +488,8 @@ impl ProtocolState {
                     DealType::HoleCard { for_player, .. } => Some(*for_player),
                     DealType::CommunityCard { .. } => None,
                 };
-                (0..self.game.num_players())
+                self.live_seats()
+                    .into_iter()
                     .filter(|pid| exclude != Some(*pid) && !self.deal_reveals.contains_key(pid))
                     .map(|pid| ValidAction {
                         player_id: pid,
@@ -1010,6 +1046,103 @@ mod tests {
         assert_eq!(st.hand_index, 1);
         assert_eq!(st.game.pot, 0);
         assert!(st.seed_commitments.iter().all(|c| c.is_none()));
+    }
+
+    #[test]
+    fn busted_players_are_excluded_from_the_crypto_protocol() {
+        crypto::init().ok();
+        let mut st = setup_table(3);
+        // Hand 1 ends with seat 1 busted.
+        st.game.players[0].chips = 1500;
+        st.game.players[1].chips = 0;
+        st.game.players[2].chips = 1500;
+        st.game.button = 0;
+        st.phase = Phase::Complete;
+        st.start_next_hand();
+
+        // Commit phase: only the live seats (0 and 2) may commit.
+        let committers: Vec<usize> = st.valid_actions().iter().map(|v| v.player_id).collect();
+        assert_eq!(committers, vec![0, 2]);
+        let hash = crypto::blake2b(b"seed").unwrap();
+        assert!(
+            st.apply(&Action::CommitSeed {
+                player_id: 1,
+                commitment: hash,
+            })
+            .is_err(),
+            "eliminated player's commit must be rejected"
+        );
+        st.apply(&Action::CommitSeed {
+            player_id: 0,
+            commitment: crypto::blake2b(b"s0").unwrap(),
+        })
+        .unwrap();
+        st.apply(&Action::CommitSeed {
+            player_id: 2,
+            commitment: crypto::blake2b(b"s2").unwrap(),
+        })
+        .unwrap();
+
+        // Shuffle skips the busted seat: 0 then 2, then straight to Lock.
+        assert!(matches!(st.phase, Phase::Shuffle { next_player: 0 }));
+        let deck = st.game.deck.clone();
+        st.apply(&Action::ShuffleDeck {
+            player_id: 0,
+            deck: deck.clone(),
+        })
+        .unwrap();
+        assert!(matches!(st.phase, Phase::Shuffle { next_player: 2 }));
+        st.apply(&Action::ShuffleDeck {
+            player_id: 2,
+            deck: deck.clone(),
+        })
+        .unwrap();
+        assert!(matches!(st.phase, Phase::Lock { next_player: 0 }));
+        st.apply(&Action::LockDeck {
+            player_id: 0,
+            deck: deck.clone(),
+        })
+        .unwrap();
+        assert!(matches!(st.phase, Phase::Lock { next_player: 2 }));
+        st.apply(&Action::LockDeck {
+            player_id: 2,
+            deck: deck.clone(),
+        })
+        .unwrap();
+
+        // Dealing hole cards to live players only; an eliminated player's
+        // reveal is rejected, and a single live reveal completes a hole card
+        // (live_count - 1 == 1).
+        let (recipient, pos) = match &st.phase {
+            Phase::Dealing {
+                deal_type: DealType::HoleCard { for_player, .. },
+                deck_position,
+            } => (*for_player, *deck_position),
+            other => panic!("expected hole-card dealing, got {:?}", other),
+        };
+        assert_ne!(recipient, 1, "busted seat must not be dealt cards");
+        let scalar = crate::crypto::Scalar([7u8; crate::crypto::SCALAR_BYTES]);
+        assert!(
+            st.apply(&Action::RevealLockKey {
+                player_id: 1,
+                deck_position: pos,
+                scalar: scalar.clone(),
+            })
+            .is_err(),
+            "eliminated player's reveal must be rejected"
+        );
+        let revealer = if recipient == 0 { 2 } else { 0 };
+        st.apply(&Action::RevealLockKey {
+            player_id: revealer,
+            deck_position: pos,
+            scalar,
+        })
+        .unwrap();
+        // One reveal sufficed — the deal advanced to the next card.
+        match &st.phase {
+            Phase::Dealing { deck_position, .. } => assert_eq!(*deck_position, pos + 1),
+            other => panic!("expected dealing to advance, got {:?}", other),
+        }
     }
 
     #[test]
