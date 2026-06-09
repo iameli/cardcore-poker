@@ -25,17 +25,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && npm install -g pnpm@9 \
     && node --version && pnpm --version
 
-# Playwright browser for web frontend tests
-RUN npx playwright install --with-deps chromium
-
 # WASM target + wasm-pack
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install wasm-pack
 
 WORKDIR /app
+
+# Install JS deps from the manifests alone, so this layer (and the Playwright
+# browser download below) stays cached across source-only changes. Lifecycle
+# scripts are skipped — dev-env's prepare needs sources that aren't copied
+# yet; the full install below runs them.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/web/package.json packages/web/
+COPY packages/dev-env/package.json packages/dev-env/
+RUN pnpm install --frozen-lockfile --ignore-scripts
+
+# Playwright browser for web frontend tests. Must run AFTER pnpm install and
+# through the workspace's own playwright, so the downloaded browser revision
+# matches the version pinned in the lockfile — a bare `npx playwright install`
+# resolves whatever's latest and drifts out of sync with the pin.
+RUN pnpm --filter @cardcore/web exec playwright install --with-deps chromium
+
 COPY . .
 
-# Install JS dependencies and pre-fetch Rust deps
+# Re-link JS deps for the full tree and pre-fetch Rust deps
 RUN pnpm install --frozen-lockfile && cargo fetch
 
 # Build WASM (both web and node targets)

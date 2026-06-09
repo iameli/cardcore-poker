@@ -195,39 +195,17 @@ async function main() {
               }
             }
 
-            // Check for completion
-            if (type === "verifySeed") {
-              const verifyCount = Array.from(seen).filter((k) => {
-                const c = actionStore.get(
-                  k
-                    .split(":")
-                    .slice(0)
-                    .join(":")
-                    .replace(/^[^:]+:/, (m) => m),
-                );
-                if (!c) return false;
-                try {
-                  return cborDecode(Buffer.from(c))?.$type?.includes("verifySeed");
-                } catch {
-                  return false;
-                }
-              }).length;
-              // Simple: if we've seen a verifySeed, wait a bit then check
-              await new Promise((r) => setTimeout(r, 1000));
-              const allVerifyActions = Array.from(actionStore.entries()).filter(([_, v]) => {
-                try {
-                  return cborDecode(Buffer.from(v))?.$type?.includes("verifySeed");
-                } catch {
-                  return false;
-                }
-              });
-              if (allVerifyActions.length >= NUM_PLAYERS) {
-                done = true;
-                clearTimeout(timeout);
-                ws.close();
-                resolve();
-                return;
-              }
+            // Check for completion: the hand is over when every agent's
+            // protocol state reaches Complete. (Seeds are no longer
+            // auto-revealed after a hand — a multi-hand game would leak the
+            // deal — so don't wait for verifySeed records.)
+            const allComplete = players.every((p) => p.wasmAgent.phase() === "Complete");
+            if (allComplete) {
+              done = true;
+              clearTimeout(timeout);
+              ws.close();
+              resolve();
+              return;
             }
           }
         } catch {}
