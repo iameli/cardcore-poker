@@ -68,13 +68,18 @@
         {loading ? "Signing in..." : "Sign In with AT Protocol"}
       </button>
 
-      <div class="divider">
-        <span>or</span>
-      </div>
+      {#if import.meta.env.DEV}
+        <!-- Demo mode is a dev-only convenience: throwaway accounts on the
+             local PDS. Real deployments sign in with real AT Protocol
+             identities. -->
+        <div class="divider">
+          <span>or</span>
+        </div>
 
-      <button class="btn demo" onclick={doDemoSignIn}> Play in Demo Mode </button>
+        <button class="btn demo" onclick={doDemoSignIn}> Play in Demo Mode </button>
 
-      <p class="hint">Demo mode uses a local identity &mdash; no account needed.</p>
+        <p class="hint">Demo mode uses a local identity &mdash; no account needed.</p>
+      {/if}
     </div>
   </div>
 </div>
