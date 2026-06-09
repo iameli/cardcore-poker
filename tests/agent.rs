@@ -177,6 +177,107 @@ fn pick_passive(options: &[BetAction]) -> BetAction {
     }
 }
 
+/// A spectator (DID not in the roster) can replay the full public transcript
+/// of a hand: it tracks the whole game, sees community cards and the final
+/// settlement, but never gets hole cards before showdown and never emits.
+#[test]
+fn spectator_replays_full_hand() {
+    let alice_did = "did:plc:alice";
+    let bob_did = "did:plc:bob";
+    let mut alice = PlayerAgent::new(alice_did, b"alice_seed").unwrap();
+    let mut bob = PlayerAgent::new(bob_did, b"bob_seed").unwrap();
+    let table_cbor = make_table_cbor(&[alice_did, bob_did], 1000, 10);
+
+    // Play a full passive hand, recording every emitted action in order — the
+    // same transcript a spectator would assemble from the players' PDSes.
+    let mut transcript: Vec<Vec<u8>> = Vec::new();
+    let mut for_alice: Vec<Vec<u8>> = Vec::new();
+    let mut for_bob: Vec<Vec<u8>> = Vec::new();
+
+    let record = |out: AgentOutput, transcript: &mut Vec<Vec<u8>>, inbox: &mut Vec<Vec<u8>>| {
+        if let AgentOutput::Actions(actions) = out {
+            for a in actions {
+                transcript.push(a.clone());
+                inbox.push(a);
+            }
+        }
+    };
+
+    record(
+        alice.receive_table(&table_cbor).unwrap(),
+        &mut transcript,
+        &mut for_bob,
+    );
+    record(
+        bob.receive_table(&table_cbor).unwrap(),
+        &mut transcript,
+        &mut for_alice,
+    );
+
+    for _ in 0..2000 {
+        if matches!(alice.phase(), Phase::Complete) && matches!(bob.phase(), Phase::Complete) {
+            break;
+        }
+        if let Some(action) = (!for_alice.is_empty()).then(|| for_alice.remove(0)) {
+            record(
+                alice.receive_action(&action).unwrap(),
+                &mut transcript,
+                &mut for_bob,
+            );
+            continue;
+        }
+        if let Some(action) = (!for_bob.is_empty()).then(|| for_bob.remove(0)) {
+            record(
+                bob.receive_action(&action).unwrap(),
+                &mut transcript,
+                &mut for_alice,
+            );
+            continue;
+        }
+        // Queues drained — somebody must need to bet.
+        if let AgentOutput::NeedBet { options } = alice.auto_respond_if_needed().unwrap() {
+            record(
+                alice.bet(pick_passive(&options)).unwrap(),
+                &mut transcript,
+                &mut for_bob,
+            );
+        } else if let AgentOutput::NeedBet { options } = bob.auto_respond_if_needed().unwrap() {
+            record(
+                bob.bet(pick_passive(&options)).unwrap(),
+                &mut transcript,
+                &mut for_alice,
+            );
+        }
+    }
+    assert!(matches!(alice.phase(), Phase::Complete));
+
+    // Replay the transcript into a spectator who isn't at the table.
+    let mut watcher = PlayerAgent::new("did:plc:watcher", b"watcher_seed").unwrap();
+    let out = watcher.receive_table(&table_cbor).unwrap();
+    assert!(
+        matches!(out, AgentOutput::Waiting),
+        "spectator must not emit on receive_table"
+    );
+
+    for (i, action) in transcript.iter().enumerate() {
+        let out = watcher.receive_action(action).unwrap();
+        assert!(
+            !matches!(out, AgentOutput::Actions(ref a) if !a.is_empty()),
+            "spectator emitted an action at transcript step {}",
+            i
+        );
+        // Hole cards stay hidden from the spectator throughout.
+        assert_eq!(watcher.hole_cards().len(), 0);
+    }
+
+    assert!(matches!(watcher.phase(), Phase::Complete));
+    assert_eq!(watcher.community_cards().len(), 5);
+    assert!(
+        watcher.last_hand_result_json().is_some(),
+        "spectator should see the settlement result"
+    );
+}
+
 fn unwrap_actions(output: AgentOutput) -> Vec<Vec<u8>> {
     match output {
         AgentOutput::Actions(a) => a,

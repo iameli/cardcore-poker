@@ -37,6 +37,7 @@
   let isOurTurn = $state(false);
   let copied = $state(false);
   let gameOver = $state(false);
+  let isSpectator = $state(false);
 
   // Pause between hands so players can read the showdown result before the
   // next hand is dealt.
@@ -94,13 +95,13 @@
       _tableTid = tidFromUri(tableUri);
       playerDids = record.players;
       ourPlayerIndex = playerDids.indexOf(session.did);
-      if (ourPlayerIndex < 0) {
-        error = "You're not a player at this table";
-        return;
-      }
+      // Not in the roster → spectate. The agent replays the whole game from
+      // the players' public PDS records; it just never gets a seat or a say.
+      isSpectator = ourPlayerIndex < 0;
       addLog(
         `Table loaded — ${playerDids.length} players, ${record.startingChips} chips, ${record.smallBlind} SB`,
       );
+      if (isSpectator) addLog("Spectating — replaying the game from PDS records…");
 
       // Init chips
       const chips = {};
@@ -114,21 +115,25 @@
         })
         .catch(() => {});
 
-      const seed = restoreOrCreateSeed(tableUri);
+      // Spectators get a throwaway seed (their agent never emits, so there's
+      // nothing worth persisting) and a no-op publisher.
+      const seed = isSpectator ? generateSeed() : restoreOrCreateSeed(tableUri);
       _publisher = new Publisher({ client: session.client, did: session.did });
 
       _session = new PlayerSession({
         did: session.did,
         seed,
-        publishAction: async ({ seq, cbor }) => {
-          addLog(`You: ${actionLabel(cbor)}`);
-          await _publisher.publishAction({
-            tableRef: { uri: tableUri, cid: _tableCid },
-            seq,
-            tableTid: _tableTid,
-            actionCbor: cbor,
-          });
-        },
+        publishAction: isSpectator
+          ? async () => {}
+          : async ({ seq, cbor }) => {
+              addLog(`You: ${actionLabel(cbor)}`);
+              await _publisher.publishAction({
+                tableRef: { uri: tableUri, cid: _tableCid },
+                seq,
+                tableTid: _tableTid,
+                actionCbor: cbor,
+              });
+            },
         onUpdate: refreshUi,
       });
 
@@ -138,7 +143,7 @@
       // out-of-phase. getRecord strips $type; add it back for the lexicon.
       const tableForCbor = { $type: LEXICONS.TABLE, ...record };
       const tableCbor = dagCbor.encode(tableForCbor);
-      addLog("Joining table…");
+      addLog(isSpectator ? "Watching table…" : "Joining table…");
       await _session.receiveTable(tableCbor);
 
       const peerDids = playerDids.filter((d) => d !== session.did);
@@ -263,9 +268,12 @@
       return;
     }
 
-    // Auto-advance to the next hand after a readable pause.
+    // Auto-advance to the next hand after a readable pause. A spectator
+    // catching up on a game in progress (buffered actions waiting) skips the
+    // pause — those hands are history, not suspense.
     if (!_advanceTimer) {
-      _advanceTimer = setTimeout(advanceHand, NEXT_HAND_DELAY);
+      const delay = isSpectator && _session.pendingCount > 0 ? 250 : NEXT_HAND_DELAY;
+      _advanceTimer = setTimeout(advanceHand, delay);
     }
   }
 
@@ -449,14 +457,20 @@
         </div>
 
         <div class="bottom-panel">
-          <ActionBar
-            actions={availableActions}
-            raise={raiseContext}
-            onAction={handleAction}
-            {isOurTurn}
-          />
-          {#if !isOurTurn && actionOnDid && actionOnDid !== session?.did}
-            <div class="waiting-turn">Waiting for {nameFor(actionOnDid)} to act…</div>
+          {#if isSpectator}
+            <div class="spectating" data-testid="spectating">
+              👁 Spectating{actionOnDid ? ` — ${nameFor(actionOnDid)} to act` : ""}
+            </div>
+          {:else}
+            <ActionBar
+              actions={availableActions}
+              raise={raiseContext}
+              onAction={handleAction}
+              {isOurTurn}
+            />
+            {#if !isOurTurn && actionOnDid && actionOnDid !== session?.did}
+              <div class="waiting-turn">Waiting for {nameFor(actionOnDid)} to act…</div>
+            {/if}
           {/if}
           <GameLog events={logEvents} />
         </div>
@@ -602,5 +616,13 @@
     color: #1a1a1a;
     opacity: 0.5;
     padding: 0.5rem;
+  }
+  .spectating {
+    text-align: center;
+    font-size: 0.45rem;
+    color: #1a1a1a;
+    padding: 0.5rem;
+    border: 2px dashed #1a1a1a;
+    letter-spacing: 1px;
   }
 </style>

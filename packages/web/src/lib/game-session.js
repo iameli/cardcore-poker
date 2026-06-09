@@ -181,6 +181,11 @@ export class PlayerSession {
     return this._betOptions;
   }
 
+  /** Number of received actions still waiting for a phase that accepts them. */
+  get pendingCount() {
+    return this._pending.length;
+  }
+
   /** Result of the most recently completed hand, or null. */
   get lastHandResult() {
     try {

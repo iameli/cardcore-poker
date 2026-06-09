@@ -85,6 +85,11 @@
         },
       });
       _watcher.start();
+    } else {
+      // Everyone else watches the host record for the game starting — whether
+      // they've requested a seat or not. When it starts, GameRoom decides if
+      // they're a player (on the roster) or a spectator.
+      _poll = setInterval(pollAcceptance, 1500);
     }
   });
 
@@ -140,7 +145,6 @@
         smallBlind: record.smallBlind,
       });
       requested = true;
-      _poll = setInterval(pollAcceptance, 1500);
       pollAcceptance();
     } catch (e) {
       error = e?.message || String(e);
@@ -151,13 +155,13 @@
     try {
       const { record } = await fetchTableRecord(uri, session.pdsUri);
       const players = record.players || [];
-      if (players.includes(session.did)) {
-        accepted = true;
-        if (record.startedAt) {
-          if (_poll) clearInterval(_poll);
-          _poll = null;
-          onStartGame();
-        }
+      accepted = players.includes(session.did);
+      if (record.startedAt) {
+        // Game's on. Enter it either way — as a player if the host put us on
+        // the roster, as a spectator if not.
+        if (_poll) clearInterval(_poll);
+        _poll = null;
+        onStartGame();
       }
     } catch {
       /* transient; keep polling */

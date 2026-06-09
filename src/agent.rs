@@ -105,12 +105,16 @@ impl PlayerAgent {
             .map_err(|e| crate::Error::Protocol(format!("invalid table CBOR: {}", e)))?;
 
         // Find our seat
-        let seat = table
+        // A DID that isn't in the roster becomes a SPECTATOR: seat stays None,
+        // the state machine tracks every action like a player's would (so the
+        // whole game can be replayed from public PDS records), but the agent
+        // never emits actions and can't bet. Hole cards stay encrypted to a
+        // spectator until players reveal them at showdown — the protocol's
+        // privacy doesn't depend on who's watching.
+        self.seat = table
             .players
             .iter()
-            .position(|did| did.as_str() == self.did)
-            .ok_or_else(|| crate::Error::Protocol("player not at this table".into()))?;
-        self.seat = Some(seat);
+            .position(|did| did.as_str() == self.did);
 
         let players: Vec<String> = table
             .players

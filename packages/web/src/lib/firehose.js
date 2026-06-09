@@ -142,20 +142,29 @@ export class FirehoseSubscriber {
     const pds = this.pdsByDid.get(did);
     if (!pds) return;
     try {
-      const url =
-        `${pds}/xrpc/com.atproto.repo.listRecords` +
-        `?repo=${encodeURIComponent(did)}` +
-        `&collection=${encodeURIComponent(LEXICONS.ACTION)}` +
-        `&limit=100&reverse=true`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = await res.json();
-      const records = data.records || [];
-      for (const r of records) {
-        if (r.value?.table?.uri !== this.tableUri) continue;
-        const seq = r.value.seq;
-        this._dispatch(did, seq, () => this._actionFromJsonRecord(r.value));
-      }
+      // Page through the WHOLE collection — a long game (or a spectator
+      // replaying one from scratch) has far more than one page of actions.
+      // reverse=true gives ascending rkey order, which matches seq order now
+      // that action rkeys are zero-padded.
+      let cursor;
+      do {
+        const url =
+          `${pds}/xrpc/com.atproto.repo.listRecords` +
+          `?repo=${encodeURIComponent(did)}` +
+          `&collection=${encodeURIComponent(LEXICONS.ACTION)}` +
+          `&limit=100&reverse=true` +
+          (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        const records = data.records || [];
+        for (const r of records) {
+          if (r.value?.table?.uri !== this.tableUri) continue;
+          const seq = r.value.seq;
+          this._dispatch(did, seq, () => this._actionFromJsonRecord(r.value));
+        }
+        cursor = records.length > 0 ? data.cursor : undefined;
+      } while (cursor);
     } catch (e) {
       console.warn(`[firehose] backfill ${did} failed:`, e?.message || e);
     }
