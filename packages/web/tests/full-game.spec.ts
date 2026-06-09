@@ -124,6 +124,11 @@ test.describe("full game (PDS-only)", () => {
         if (logged) {
           aggressive = true;
           firstHandLogged = true;
+          // During the showdown pause, the opponent's revealed hole cards are
+          // laid face-up on the table (not just described in the log).
+          await expect(a.page.locator(".seat-area.top .card-face")).toHaveCount(2, {
+            timeout: 3000,
+          });
         }
       }
 

@@ -4,7 +4,7 @@
   import PokerTable from "./PokerTable.svelte";
   import ActionBar from "./ActionBar.svelte";
   import GameLog from "./GameLog.svelte";
-  import { initWasm } from "../lib/cardcore-wasm.js";
+  import { initWasm, parseCard } from "../lib/cardcore-wasm.js";
   import { PlayerSession, generateSeed } from "../lib/game-session.js";
   import { Publisher } from "../lib/transport.js";
   import { FirehoseSubscriber } from "../lib/firehose.js";
@@ -29,6 +29,9 @@
   let actionOnDid = $state(null);
   let holeCards = $state([]);
   let communityCards = $state([]);
+  // Opponents' hole cards revealed at showdown (did → parsed cards), shown on
+  // the table during the between-hands pause. Cleared when the next hand deals.
+  let revealedByDid = $state({});
   let availableActions = $state([]);
   let raiseContext = $state(null);
   let isOurTurn = $state(false);
@@ -243,6 +246,14 @@
     if (result && result.hand_index > _loggedHandIndex) {
       _loggedHandIndex = result.hand_index;
       logHandResult(result);
+      // Lay everyone's revealed hole cards face-up on the table for the
+      // between-hands pause — the log alone is too easy to miss.
+      const revealed = {};
+      for (const s of result.shown || []) {
+        const did = playerDids[s.seat];
+        if (did) revealed[did] = s.cards.map(parseCard).filter(Boolean);
+      }
+      revealedByDid = revealed;
     }
 
     if (_session.gameOver) {
@@ -281,6 +292,7 @@
   async function advanceHand() {
     _advanceTimer = null;
     if (!_session || _session.gameOver) return;
+    revealedByDid = {};
     addLog("Next hand…");
     try {
       await _session.nextHand();
@@ -371,7 +383,7 @@
     return m;
   });
 
-  const decryptedHoleCards = $derived({ [session?.did]: holeCards });
+  const decryptedHoleCards = $derived({ ...revealedByDid, [session?.did]: holeCards });
 
   const playerDidsMap = $derived.by(() => {
     const m = {};
