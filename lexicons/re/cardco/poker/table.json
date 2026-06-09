@@ -35,6 +35,11 @@
             "format": "datetime",
             "description": "Set by the host when the roster is locked and the hand begins. Absent while the room is still open for joiners. Once present, players reference this record as the canonical table for the hand."
           },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Bumped periodically by a joining player while they wait to be admitted, so a host that missed the original join-request commit (dropped socket, late subscribe) discovers it from a later one."
+          },
           "createdAt": {
             "type": "string",
             "format": "datetime"

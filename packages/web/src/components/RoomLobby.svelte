@@ -29,6 +29,13 @@
   let _publisher = null;
   let _watcher = null;
   let _poll = null;
+  let _bump = null;
+  let _joinRequest = null; // last-published join request, re-bumped while waiting
+
+  // How often a waiting joiner re-publishes their request with a fresh
+  // updatedAt. Discovery is a live stream with no backfill, so this is what
+  // saves a host that missed the original commit (dropped socket, reload).
+  const JOIN_BUMP_INTERVAL = 15_000;
 
   let handleByDid = $state({});
 
@@ -96,6 +103,7 @@
   onDestroy(() => {
     _watcher?.stop();
     if (_poll) clearInterval(_poll);
+    if (_bump) clearInterval(_bump);
   });
 
   // ─── Host actions ─────────────────────────────────────────────────
@@ -139,15 +147,37 @@
       const roster = players.includes(session.did) ? players : [...players, session.did];
       // Publish our "suggested addition": the host's table at the same rkey on
       // OUR repo, with us appended. The host discovers this on the firehose.
-      await _publisher.publishTableWithRkey(tid, {
+      _joinRequest = {
         players: roster,
         startingChips: record.startingChips,
         smallBlind: record.smallBlind,
+      };
+      await _publisher.publishTableWithRkey(tid, {
+        ..._joinRequest,
+        updatedAt: new Date().toISOString(),
       });
       requested = true;
+      _bump = setInterval(bumpJoinRequest, JOIN_BUMP_INTERVAL);
       pollAcceptance();
     } catch (e) {
       error = e?.message || String(e);
+    }
+  }
+
+  /** Re-publish the join request with a fresh updatedAt until we're admitted. */
+  async function bumpJoinRequest() {
+    if (accepted || !_joinRequest) {
+      if (_bump) clearInterval(_bump);
+      _bump = null;
+      return;
+    }
+    try {
+      await _publisher.publishTableWithRkey(tid, {
+        ..._joinRequest,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      /* transient; try again next tick */
     }
   }
 

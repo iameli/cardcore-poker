@@ -94,8 +94,8 @@ export class Publisher {
     return this._createRecord(LEXICONS.TABLE, record);
   }
 
-  async publishTableWithRkey(rkey, { players, startingChips, smallBlind, startedAt }) {
-    const record = buildTableRecord({ players, startingChips, smallBlind, startedAt });
+  async publishTableWithRkey(rkey, { players, startingChips, smallBlind, startedAt, updatedAt }) {
+    const record = buildTableRecord({ players, startingChips, smallBlind, startedAt, updatedAt });
     return this._createWithRkey(LEXICONS.TABLE, rkey, record);
   }
 
