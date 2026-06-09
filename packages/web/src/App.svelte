@@ -13,7 +13,10 @@
     typeof localStorage !== "undefined" && localStorage.getItem("cardcore_unlocked") === "1",
   );
 
-  let page = $state("signin");
+  // Start in "loading" — we don't yet know whether a session will restore.
+  // Showing SignIn immediately makes the login form flash on every page load
+  // for signed-in users; every auth path below resolves to a real page.
+  let page = $state("loading");
   let session = $state(null);
   let tableUri = $state(null);
   let roomUri = $state(null);
@@ -143,10 +146,13 @@
           const s = await restoreDemoSession();
           if (s) {
             routeAfterAuth(s);
+            return;
           }
         } catch (err) {
           console.warn("Demo session restore failed:", err);
         }
+        // No session anywhere — now we know it's time to sign in.
+        page = "signin";
       })();
     }
   });
@@ -203,6 +209,13 @@
 <div class="app">
   {#if !unlocked}
     <PasswordGate onUnlock={() => (unlocked = true)} />
+  {:else if page === "loading"}
+    <div class="boot-loading" data-testid="loading">
+      <div class="boot-card">
+        <span class="boot-spinner"></span>
+        Loading…
+      </div>
+    </div>
   {:else if page === "signin"}
     <SignIn {onSignIn} />
   {:else if page === "lobby"}
@@ -241,5 +254,34 @@
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+  }
+  .boot-loading {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .boot-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.5rem;
+    color: #1a1a1a;
+    border: 3px solid #1a1a1a;
+    box-shadow: 6px 6px 0 #1a1a1a;
+    padding: 0.8rem 1.2rem;
+    letter-spacing: 1px;
+  }
+  .boot-spinner {
+    width: 0.6rem;
+    height: 0.6rem;
+    border: 3px solid #1a1a1a;
+    border-top-color: #c0392b;
+    animation: boot-spin 0.8s steps(8) infinite;
+  }
+  @keyframes boot-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
