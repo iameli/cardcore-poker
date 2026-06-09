@@ -12,8 +12,8 @@
         "properties": {
           "players": {
             "type": "array",
-            "description": "Player DIDs in seat order.",
-            "minLength": 2,
+            "description": "Player DIDs in seat order. A freshly-created open room may list only the host (length 1); the roster grows as the host admits joiners.",
+            "minLength": 1,
             "maxLength": 10,
             "items": {
               "type": "string",
@@ -29,6 +29,11 @@
             "type": "integer",
             "minimum": 1,
             "description": "Small blind amount. Big blind is 2x."
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Set by the host when the roster is locked and the hand begins. Absent while the room is still open for joiners. Once present, players reference this record as the canonical table for the hand."
           },
           "createdAt": {
             "type": "string",

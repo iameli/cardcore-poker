@@ -17,6 +17,36 @@
   let tableUri = $state(null);
   let roomUri = $state(null);
 
+  /**
+   * Read a room deep link out of the path. We use a path-based form —
+   * https://cardco.re/at://did:.../re.cardco.poker.table/tid — so a room is a
+   * plain shareable URL. Some servers/clients collapse the `//` in `at://`, so
+   * we normalize defensively.
+   */
+  function readRoomUriFromPath() {
+    let p;
+    try {
+      p = decodeURIComponent(window.location.pathname);
+    } catch {
+      p = window.location.pathname;
+    }
+    if (!p.startsWith("/at:")) return null;
+    p = p.slice(1).replace(/^at:\/+/, "at://");
+    return p.startsWith("at://") ? p : null;
+  }
+
+  // After auth resolves, route to the room deep link if present, else the lobby.
+  function routeAfterAuth(s) {
+    session = s;
+    const deep = readRoomUriFromPath();
+    if (deep) {
+      roomUri = deep;
+      page = "roomLobby";
+    } else {
+      page = "lobby";
+    }
+  }
+
   $effect(() => {
     if (!unlocked) return;
 
@@ -31,9 +61,9 @@
       handleCallback()
         .then((s) => {
           if (s) {
-            session = s;
-            page = "lobby";
+            // Drop the OAuth hash but keep the path (may be a room deep link).
             window.history.replaceState({}, "", window.location.pathname);
+            routeAfterAuth(s);
           }
         })
         .catch((err) => {
@@ -53,8 +83,7 @@
         try {
           const s = await getStoredSession();
           if (s) {
-            session = s;
-            page = "lobby";
+            routeAfterAuth(s);
             return;
           }
         } catch (err) {
@@ -63,8 +92,7 @@
         try {
           const s = await restoreDemoSession();
           if (s) {
-            session = s;
-            page = "lobby";
+            routeAfterAuth(s);
           }
         } catch (err) {
           console.warn("Demo session restore failed:", err);
@@ -74,13 +102,13 @@
   });
 
   function onSignIn(sess) {
-    session = sess;
-    page = "lobby";
+    routeAfterAuth(sess);
   }
 
   function onCreateRoom(uri) {
     roomUri = uri;
     page = "roomLobby";
+    window.history.pushState({}, "", `/${uri}`);
   }
 
   function onStartGame() {
@@ -88,12 +116,14 @@
       tableUri = roomUri;
       page = "game";
       roomUri = null;
+      window.history.replaceState({}, "", "/");
     }
   }
 
   function onLeaveRoom() {
     roomUri = null;
     page = "lobby";
+    window.history.replaceState({}, "", "/");
   }
 
   function onJoinTable(uri) {
@@ -113,6 +143,7 @@
     page = "signin";
     tableUri = null;
     roomUri = null;
+    window.history.replaceState({}, "", "/");
   }
 </script>
 

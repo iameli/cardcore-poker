@@ -1,20 +1,175 @@
 <script>
+  import { onMount, onDestroy } from "svelte";
+  import { Publisher } from "../lib/transport.js";
+  import { JoinRequestWatcher } from "../lib/discovery.js";
+  import { pdsForDid } from "../lib/atproto.js";
+
   let { session, uri, onStartGame, onLeaveRoom } = $props();
 
-  let copied = $state(false);
+  // The room URI is at://<host>/re.cardco.poker.table/<tid>. We're the host
+  // iff the repo segment is our own DID.
+  const repo = $derived(uri ? uri.split("/")[2] : "");
+  const tid = $derived(uri ? uri.split("/").pop() : "");
+  const isHost = $derived(!!session?.did && repo === session.did);
+  const roomLink = $derived(uri ? `${window.location.origin}/${uri}` : "");
 
-  function copyUri() {
-    if (uri) {
-      navigator.clipboard.writeText(uri);
-      copied = true;
-      setTimeout(() => {
-        copied = false;
-      }, 2000);
+  let copied = $state(false);
+  let error = $state("");
+  let tableInfo = $state(null); // { startingChips, smallBlind, players }
+
+  // host-side state
+  let pending = $state([]); // [{ joinerDid }] awaiting approval
+  let approved = $state([]); // [joinerDid] admitted to the roster
+  let starting = $state(false);
+
+  // joiner-side state
+  let requested = $state(false);
+  let accepted = $state(false);
+
+  let _publisher = null;
+  let _watcher = null;
+  let _poll = null;
+
+  function shortDid(did) {
+    return did ? did.slice(0, 10) + "…" + did.slice(-4) : "";
+  }
+
+  async function fetchTableRecord(u) {
+    const m = u.match(/^at:\/\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (!m) throw new Error(`Bad table URI: ${u}`);
+    const [, r, collection, rkey] = m;
+    const pds = await pdsForDid(r, session.pdsUri);
+    const url =
+      `${pds}/xrpc/com.atproto.repo.getRecord` +
+      `?repo=${encodeURIComponent(r)}` +
+      `&collection=${encodeURIComponent(collection)}` +
+      `&rkey=${encodeURIComponent(rkey)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`getRecord(${r}) ${res.status}`);
+    const data = await res.json();
+    return { record: data.value, cid: data.cid };
+  }
+
+  onMount(async () => {
+    if (!session?.client || !uri) return;
+    _publisher = new Publisher({ client: session.client, did: session.did });
+
+    try {
+      const { record } = await fetchTableRecord(uri);
+      tableInfo = {
+        startingChips: record.startingChips,
+        smallBlind: record.smallBlind,
+        players: record.players || [],
+      };
+    } catch (e) {
+      // Brand-new host record may not be readable for a beat; fall back to the
+      // protocol defaults so the host UI still renders.
+      tableInfo = { startingChips: 1000, smallBlind: 10, players: [session.did] };
+    }
+
+    if (isHost) {
+      // Discover join requests (table records other repos publish at our rkey).
+      _watcher = new JoinRequestWatcher({
+        hostDid: session.did,
+        tableRkey: tid,
+        ownPdsUri: session.pdsUri,
+        onRequest: ({ joinerDid }) => {
+          if (joinerDid === session.did) return;
+          if (approved.includes(joinerDid)) return;
+          if (pending.some((p) => p.joinerDid === joinerDid)) return;
+          pending = [...pending, { joinerDid }];
+        },
+      });
+      _watcher.start();
+    }
+  });
+
+  onDestroy(() => {
+    _watcher?.stop();
+    if (_poll) clearInterval(_poll);
+  });
+
+  // ─── Host actions ─────────────────────────────────────────────────
+  function approve(joinerDid) {
+    if (!approved.includes(joinerDid)) approved = [...approved, joinerDid];
+    pending = pending.filter((p) => p.joinerDid !== joinerDid);
+  }
+
+  async function startGame() {
+    if (!isHost || starting) return;
+    if (approved.length < 1) {
+      error = "Approve at least one player before starting";
+      return;
+    }
+    starting = true;
+    error = "";
+    try {
+      // Publish the locked roster + startedAt. This host record is the single
+      // source of truth every player references for the hand (seat order, CID).
+      const roster = [session.did, ...approved];
+      await _publisher.publishTableWithRkey(tid, {
+        players: roster,
+        startingChips: tableInfo?.startingChips ?? 1000,
+        smallBlind: tableInfo?.smallBlind ?? 10,
+        startedAt: new Date().toISOString(),
+      });
+      onStartGame();
+    } catch (e) {
+      error = e?.message || String(e);
+      starting = false;
     }
   }
 
-  const tid = $derived(uri ? uri.split("/").pop() : "");
+  // ─── Joiner actions ───────────────────────────────────────────────
+  async function requestJoin() {
+    if (isHost || requested) return;
+    error = "";
+    try {
+      const { record } = await fetchTableRecord(uri);
+      const players = record.players || [];
+      const roster = players.includes(session.did) ? players : [...players, session.did];
+      // Publish our "suggested addition": the host's table at the same rkey on
+      // OUR repo, with us appended. The host discovers this via Jetstream.
+      await _publisher.publishTableWithRkey(tid, {
+        players: roster,
+        startingChips: record.startingChips,
+        smallBlind: record.smallBlind,
+      });
+      requested = true;
+      _poll = setInterval(pollAcceptance, 1500);
+      pollAcceptance();
+    } catch (e) {
+      error = e?.message || String(e);
+    }
+  }
+
+  async function pollAcceptance() {
+    try {
+      const { record } = await fetchTableRecord(uri);
+      const players = record.players || [];
+      if (players.includes(session.did)) {
+        accepted = true;
+        if (record.startedAt) {
+          if (_poll) clearInterval(_poll);
+          _poll = null;
+          onStartGame();
+        }
+      }
+    } catch {
+      /* transient; keep polling */
+    }
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(roomLink);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {}
+  }
+
   const playerName = $derived(session?.handle || session?.name || "Player");
+  const rosterCount = $derived(1 + approved.length);
 </script>
 
 <div class="room-lobby">
@@ -25,28 +180,103 @@
         {session?.did?.slice(0, 12)}…{session?.did?.slice(-6)}
       </span>
     </div>
-    <button class="btn logout" onclick={onLeaveRoom}>Leave</button>
+    <button class="btn logout" onclick={onLeaveRoom} data-testid="leave-room">Leave</button>
   </header>
 
   <div class="content">
-    <h2>Room Waiting for Players</h2>
+    {#if isHost}
+      <h2>Your Open Room</h2>
 
-    <section class="card">
-      <h3>Share This Link</h3>
-      <p class="hint">Send this to other players so they can join:</p>
-      <div class="uri-container" data-testid="copy-table-uri">
-        <code>{tid}</code>
-        <button class="btn secondary" onclick={copyUri} data-testid="copy-uri-button">
-          {copied ? "Copied!" : "Copy"}
+      <section class="card">
+        <h3>Share This Link</h3>
+        <p class="hint">Send this to players you want to invite:</p>
+        <div class="uri-container" data-testid="copy-table-uri">
+          <code>{tid}</code>
+          <button class="btn secondary" onclick={copyLink} data-testid="copy-uri-button">
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>Join Requests</h3>
+        {#if pending.length === 0}
+          <p class="hint" data-testid="no-requests">Waiting for players to request to join…</p>
+        {:else}
+          <ul class="request-list">
+            {#each pending as req (req.joinerDid)}
+              <li class="request-row">
+                <span class="req-did" title={req.joinerDid}>{shortDid(req.joinerDid)}</span>
+                <button
+                  class="btn primary small"
+                  onclick={() => approve(req.joinerDid)}
+                  data-testid="approve-request"
+                >
+                  Approve
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <section class="card">
+        <h3>Roster ({rosterCount})</h3>
+        <ul class="roster-list" data-testid="roster">
+          <li class="roster-row">
+            <span class="req-did">{shortDid(session?.did)}</span>
+            <span class="tag">host</span>
+          </li>
+          {#each approved as did (did)}
+            <li class="roster-row">
+              <span class="req-did" title={did}>{shortDid(did)}</span>
+              <span class="tag ok">approved</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+
+      <div class="actions">
+        <button
+          class="btn primary"
+          onclick={startGame}
+          disabled={starting || approved.length < 1}
+          data-testid="start-game"
+        >
+          {starting ? "Starting…" : "Start Game"}
         </button>
       </div>
-    </section>
+    {:else}
+      <h2>Join Room</h2>
 
-    <div class="actions">
-      <button class="btn primary" onclick={onStartGame} data-testid="start-game">
-        Start Game
-      </button>
-    </div>
+      <section class="card">
+        <h3>Table</h3>
+        <p class="hint">Hosted by {shortDid(repo)}</p>
+        {#if tableInfo}
+          <p class="hint">
+            {tableInfo.startingChips} chips · {tableInfo.smallBlind} small blind
+          </p>
+        {/if}
+      </section>
+
+      <div class="actions">
+        {#if !requested}
+          <button class="btn primary" onclick={requestJoin} data-testid="request-join">
+            Request to Join
+          </button>
+        {:else if accepted}
+          <p class="status ok" data-testid="join-status">
+            Approved — waiting for the host to start…
+          </p>
+        {:else}
+          <p class="status" data-testid="join-status">Requested — waiting for the host…</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if error}
+      <p class="error" data-testid="room-error">{error}</p>
+    {/if}
   </div>
 </div>
 
@@ -111,7 +341,7 @@
     font-size: 0.4rem;
     color: #1a1a1a;
     opacity: 0.6;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
   }
   .uri-container {
     display: flex;
@@ -129,6 +359,46 @@
     word-break: break-all;
     overflow-wrap: break-word;
   }
+  .request-list,
+  .roster-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .request-row,
+  .roster-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border: 2px solid #1a1a1a;
+    padding: 0.4rem 0.6rem;
+  }
+  .req-did {
+    font-size: 0.4rem;
+    color: #1a1a1a;
+  }
+  .tag {
+    font-size: 0.32rem;
+    letter-spacing: 1px;
+    opacity: 0.6;
+    text-transform: uppercase;
+  }
+  .tag.ok {
+    color: #1a7a3a;
+    opacity: 1;
+  }
+  .status {
+    font-size: 0.45rem;
+    text-align: center;
+    color: #1a1a1a;
+    opacity: 0.7;
+  }
+  .status.ok {
+    color: #1a7a3a;
+    opacity: 1;
+  }
   .btn {
     padding: 0.7rem 1.2rem;
     border: 2px solid #1a1a1a;
@@ -141,6 +411,10 @@
     color: #1a1a1a;
     box-shadow: 3px 3px 0 #1a1a1a;
     transition: all 0.1s;
+  }
+  .btn.small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.4rem;
   }
   .btn:hover:not(:disabled) {
     transform: translate(2px, 2px);
@@ -176,8 +450,16 @@
   }
   .actions {
     display: flex;
-    justify-content: center;
-    gap: 1rem;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
     margin-top: 1rem;
+  }
+  .error {
+    color: #c0392b;
+    font-size: 0.45rem;
+    text-align: center;
+    padding: 0.5rem;
+    border: 2px dashed #c0392b;
   }
 </style>

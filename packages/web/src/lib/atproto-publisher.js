@@ -32,12 +32,13 @@ export const ACTION_TYPES = {
 
 // ─── Record Builders ───────────────────────────────────────────────
 
-export function buildTableRecord({ players, startingChips, smallBlind }) {
+export function buildTableRecord({ players, startingChips, smallBlind, startedAt }) {
   return {
     $type: LEXICONS.TABLE,
     players,
     startingChips,
     smallBlind,
+    ...(startedAt ? { startedAt } : {}),
     createdAt: new Date().toISOString(),
   };
 }
