@@ -113,6 +113,24 @@ test.describe("multiplayer (PDS-only)", () => {
       await expect(page.getByTestId("phase")).toHaveText(/showdown/, { timeout: 30_000 });
     }
 
+    // The log anchors to the bottom as entries stream in…
+    const log = a.page.locator(".log-entries");
+    await expect
+      .poll(() => log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 10))
+      .toBe(true);
+    await expect(a.page.getByTestId("log-jump-live")).toHaveCount(0);
+    // …until you scroll up, which shows the return-to-live arrow…
+    await log.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(a.page.getByTestId("log-jump-live")).toBeVisible();
+    // …and clicking it re-anchors.
+    await a.page.getByTestId("log-jump-live").click();
+    await expect(a.page.getByTestId("log-jump-live")).toHaveCount(0);
+    await expect
+      .poll(() => log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 10))
+      .toBe(true);
+
     await a.ctx.close();
     await b.ctx.close();
   });
