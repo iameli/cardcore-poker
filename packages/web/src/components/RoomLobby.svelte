@@ -129,7 +129,7 @@
       const players = record.players || [];
       const roster = players.includes(session.did) ? players : [...players, session.did];
       // Publish our "suggested addition": the host's table at the same rkey on
-      // OUR repo, with us appended. The host discovers this via Jetstream.
+      // OUR repo, with us appended. The host discovers this on the firehose.
       await _publisher.publishTableWithRkey(tid, {
         players: roster,
         startingChips: record.startingChips,

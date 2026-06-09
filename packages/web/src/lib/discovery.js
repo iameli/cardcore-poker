@@ -1,29 +1,22 @@
 /**
  * Join-request discovery for the open-room lobby.
  *
- * When a host opens a room, they don't yet know who will ask to join, so they
- * can't filter a firehose by `wantedDids`. Instead the host watches for
- * `re.cardco.poker.table` records published at *their* table's rkey by *other*
- * repos — each such record is a join request listing `[host, …, joiner]`.
+ * When a host opens a room they don't know who will ask to join, so they can't
+ * filter a firehose by `wantedDids`. Instead the host subscribes to the FULL
+ * unfiltered firehose (`com.atproto.sync.subscribeRepos` with no `wantedDids`)
+ * and watches for `re.cardco.poker.table` records published at *their* table's
+ * rkey by *other* repos — each such record is a join request listing
+ * `[host, …, joiner]`.
  *
- * Two modes mirror lib/firehose.js:
+ * Endpoint:
+ *  - **prod**: `VITE_RELAY_URL` (the network relay, e.g. wss://bsky.network),
+ *    which streams the whole network so joiners on any PDS are visible.
+ *  - **dev**:  the host's own PDS (`ownPdsUri`) — the local dev PDS hosts all
+ *    our demo accounts, so its firehose already includes every joiner.
  *
- *  1. **Jetstream** (prod) — when `VITE_JETSTREAM_URL` is set, open one socket
- *     to `${url}/subscribe?wantedCollections=re.cardco.poker.table`. Jetstream
- *     filters by collection across the whole network, which is exactly what
- *     discovery needs (the joiner's DID is unknown up front). Messages are
- *     plain JSON.
- *
- *  2. **Per-PDS subscribeRepos** (dev fallback) — when no Jetstream is
- *     configured, subscribe to the host's own PDS `com.atproto.sync.subscribeRepos`
- *     with no `wantedDids` and filter client-side. The local dev PDS only hosts
- *     our demo accounts, so this is cheap.
- *
- * IMPORTANT: this is DISCOVERY ONLY. Jetstream is a re-serialized, unsigned
- * convenience stream — fine for "who wants to play" but NOT trustworthy for
- * gameplay. Once the host starts the hand, players verify the host's table
- * record directly and exchange moves over the real (CAR-backed, signed)
- * firehose via wantedDids in GameRoom. The watcher is torn down before then.
+ * This runs ONLY in the lobby. The watcher is stopped the moment the host
+ * starts the hand (RoomLobby unmounts) — we don't carry the full firehose into
+ * gameplay, which subscribes to the filtered (wantedDids) firehose in GameRoom.
  */
 import { decodeMultiple } from "cbor-x";
 import { CarReader } from "@ipld/car";
@@ -79,9 +72,11 @@ export class JoinRequestWatcher {
   }
 
   start() {
-    const jetstream = import.meta.env.VITE_JETSTREAM_URL;
-    if (jetstream) this._connectJetstream(jetstream);
-    else this._connectSubscribeRepos();
+    // Prod: the network relay (whole-network firehose). Dev: our own PDS, which
+    // hosts every demo account. Either way it's the unfiltered subscribeRepos
+    // stream — the host doesn't know joiner DIDs up front, so it can't filter.
+    const base = import.meta.env.VITE_RELAY_URL || this.ownPdsUri;
+    this._connect(base);
   }
 
   stop() {
@@ -119,42 +114,9 @@ export class JoinRequestWatcher {
     }, next);
   }
 
-  // ─── Jetstream (prod) ────────────────────────────────────────────
-  _connectJetstream(base) {
+  _connect(base) {
     if (this.stopped) return;
-    const url =
-      `${originToWs(base)}/subscribe` + `?wantedCollections=${encodeURIComponent(LEXICONS.TABLE)}`;
-    const ws = new WebSocket(url);
-    this.ws = ws;
-
-    ws.addEventListener("open", () => {
-      this.reconnectDelay = 0;
-    });
-
-    ws.addEventListener("message", (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.kind !== "commit") return;
-        const c = msg.commit;
-        if (!c || c.collection !== LEXICONS.TABLE) return;
-        if (c.rkey !== this.tableRkey) return;
-        if (c.operation !== "create" && c.operation !== "update") return;
-        this._emit(msg.did, c.record);
-      } catch (e) {
-        console.warn("[discovery] jetstream message error:", e?.message || e);
-      }
-    });
-
-    ws.addEventListener("close", () => this._reconnect(() => this._connectJetstream(base)));
-    ws.addEventListener("error", () => {
-      /* close handler retries */
-    });
-  }
-
-  // ─── Per-PDS subscribeRepos (dev fallback) ───────────────────────
-  _connectSubscribeRepos() {
-    if (this.stopped) return;
-    const url = `${originToWs(this.ownPdsUri)}/xrpc/com.atproto.sync.subscribeRepos`;
+    const url = `${originToWs(base)}/xrpc/com.atproto.sync.subscribeRepos`;
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
@@ -181,7 +143,7 @@ export class JoinRequestWatcher {
       }
     });
 
-    ws.addEventListener("close", () => this._reconnect(() => this._connectSubscribeRepos()));
+    ws.addEventListener("close", () => this._reconnect(() => this._connect(base)));
     ws.addEventListener("error", () => {
       /* close handler retries */
     });

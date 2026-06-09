@@ -79,12 +79,13 @@ export default defineConfig({
         const defaultFirehose = command === "build" ? "wss://firehose.channel" : "";
         process.env.VITE_FIREHOSE_URL = process.env.FIREHOSE_URL ?? defaultFirehose;
 
-        // Jetstream — used ONLY for open-room join discovery (filtering by
-        // collection across the whole network, since the host doesn't know
-        // joiner DIDs up front). Gameplay never touches Jetstream. In dev we
-        // leave it empty and fall back to the local PDS subscribeRepos stream.
-        const defaultJetstream = command === "build" ? "wss://jetstream2.us-east.bsky.network" : "";
-        process.env.VITE_JETSTREAM_URL = process.env.JETSTREAM_URL ?? defaultJetstream;
+        // Full firehose relay — the open-room HOST subscribes to the unfiltered
+        // firehose (subscribeRepos, no wantedDids) to discover join requests,
+        // since it doesn't know joiner DIDs up front. Only used in the lobby;
+        // gameplay uses the filtered firehose above. In dev we leave it empty
+        // and fall back to the local PDS, which hosts all our demo accounts.
+        const defaultRelay = command === "build" ? "wss://bsky.network" : "";
+        process.env.VITE_RELAY_URL = process.env.RELAY_URL ?? defaultRelay;
       },
       configureServer(server) {
         // Serve the (possibly rewritten) metadata in dev too. Dev OAuth uses
