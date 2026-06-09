@@ -1,6 +1,7 @@
 <script>
   import SignIn from "./components/SignIn.svelte";
   import Lobby from "./components/Lobby.svelte";
+  import RoomLobby from "./components/RoomLobby.svelte";
   import GameRoom from "./components/GameRoom.svelte";
   import PasswordGate from "./components/PasswordGate.svelte";
   import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
@@ -14,9 +15,11 @@
   let page = $state("signin");
   let session = $state(null);
   let tableUri = $state(null);
+  let roomUri = $state(null);
 
   $effect(() => {
     if (!unlocked) return;
+
     // Check for OAuth callback (atcute uses fragment mode: #code=...&state=...&iss=...)
     const hash = window.location.hash;
     // Only handle callback if all required params are present
@@ -75,6 +78,24 @@
     page = "lobby";
   }
 
+  function onCreateRoom(uri) {
+    roomUri = uri;
+    page = "roomLobby";
+  }
+
+  function onStartGame() {
+    if (roomUri) {
+      tableUri = roomUri;
+      page = "game";
+      roomUri = null;
+    }
+  }
+
+  function onLeaveRoom() {
+    roomUri = null;
+    page = "lobby";
+  }
+
   function onJoinTable(uri) {
     tableUri = uri;
     page = "game";
@@ -91,6 +112,7 @@
     session = null;
     page = "signin";
     tableUri = null;
+    roomUri = null;
   }
 </script>
 
@@ -100,7 +122,9 @@
   {:else if page === "signin"}
     <SignIn {onSignIn} />
   {:else if page === "lobby"}
-    <Lobby {session} {onJoinTable} {onSignOut} />
+    <Lobby {session} {onJoinTable} {onCreateRoom} {onSignOut} />
+  {:else if page === "roomLobby"}
+    <RoomLobby {session} uri={roomUri} {onStartGame} {onLeaveRoom} />
   {:else if page === "game"}
     <GameRoom {session} {tableUri} onLeaveRoom={onLeaveTable} />
   {/if}

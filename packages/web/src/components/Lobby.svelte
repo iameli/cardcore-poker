@@ -2,7 +2,7 @@
   import { initWasm } from "../lib/cardcore-wasm.js";
   import { Publisher } from "../lib/transport.js";
 
-  let { session, onJoinTable, onSignOut } = $props();
+  let { session, onJoinTable, onSignOut, onCreateRoom = null } = $props();
 
   let opponentHandle = $state("");
   let joinUri = $state("");
@@ -59,6 +59,28 @@
     }
   }
 
+  async function createOpenRoom() {
+    if (!session?.client) {
+      error = "Sign in first";
+      return;
+    }
+    creating = true;
+    error = "";
+    try {
+      const publisher = new Publisher({ client: session.client, did: session.did });
+      const result = await publisher.createTable({
+        players: [session.did],
+        startingChips: 1000,
+        smallBlind: 10,
+      });
+      onCreateRoom(result.uri);
+    } catch (e) {
+      error = e?.message || String(e);
+    } finally {
+      creating = false;
+    }
+  }
+
   function joinTable() {
     const uri = joinUri.trim();
     if (!uri.startsWith("at://")) {
@@ -86,7 +108,7 @@
     <h2>Lobby</h2>
 
     <section class="card">
-      <h3>Start a New Table</h3>
+      <h3>Invite a Specific Player</h3>
       <p class="hint">Enter the handle of the player you want to play with.</p>
       <div class="join-row">
         <input
@@ -105,6 +127,21 @@
           {creating ? "Creating…" : "Create Table"}
         </button>
       </div>
+    </section>
+
+    <div class="divider"><span>or</span></div>
+
+    <section class="card">
+      <h3>Create Open Room</h3>
+      <p class="hint">Create a room and share the link with others to play.</p>
+      <button
+        class="btn primary"
+        onclick={createOpenRoom}
+        disabled={creating}
+        data-testid="create-open-room"
+      >
+        {creating ? "Creating…" : "Create Open Room"}
+      </button>
     </section>
 
     <div class="divider"><span>or</span></div>
