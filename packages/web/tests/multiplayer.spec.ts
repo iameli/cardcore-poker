@@ -95,6 +95,14 @@ test.describe("multiplayer (PDS-only)", () => {
     // DIDs should only be a fallback — A's table shows B by handle.
     await expect(a.page.getByText(handleB).first()).toBeVisible({ timeout: 15_000 });
 
+    // Noninteractive protocol steps are visible in the log too.
+    await expect(
+      a.page
+        .locator(".log-entry")
+        .filter({ hasText: /commitSeed/ })
+        .first(),
+    ).toBeVisible();
+
     // Fold and verify the hand reaches Showdown/Complete on both sides
     await actingPage.getByRole("button", { name: /^FOLD$/ }).click();
     for (const page of [a.page, b.page]) {

@@ -59,6 +59,26 @@
     return uri.split("/").pop();
   }
 
+  /**
+   * Human-readable label for an action CBOR payload, so the log shows every
+   * protocol step — including the noninteractive ones (commitSeed, shuffle,
+   * lock, deal reveals). Seeing those tick by is how you know the game is
+   * working while nobody's betting.
+   */
+  function actionLabel(cbor) {
+    try {
+      const rec = dagCbor.decode(cbor);
+      const kind = (rec.$type || "").split("#").pop() || "action";
+      if (kind === "bet") {
+        return rec.amount != null ? `${rec.action} ${rec.amount}` : rec.action;
+      }
+      if (kind === "revealLockKey") return `revealLockKey #${rec.deckPosition}`;
+      return kind;
+    } catch {
+      return "action";
+    }
+  }
+
   // ─── Mount: fetch table, start session + poller ───────────────────
   onMount(async () => {
     if (!session?.client) {
@@ -101,6 +121,7 @@
         did: session.did,
         seed,
         publishAction: async ({ seq, cbor }) => {
+          addLog(`You: ${actionLabel(cbor)}`);
           await _publisher.publishAction({
             tableRef: { uri: tableUri, cid: _tableCid },
             seq,
@@ -126,6 +147,7 @@
         tableUri,
         ownPdsUri: session.pdsUri,
         onAction: async (did, seq, cbor) => {
+          addLog(`${nameFor(did)}: ${actionLabel(cbor)}`);
           try {
             await _session.receiveAction(cbor);
           } catch (e) {
@@ -345,7 +367,8 @@
     let bet;
     if (action.type === "raise") bet = `raise:${action.amount || 2}`;
     else bet = action.type;
-    addLog(`You: ${action.type}${action.amount ? " " + action.amount : ""}`);
+    // No addLog here — the bet is logged like every other action when its
+    // record is published.
     try {
       await _session.bet(bet);
     } catch (e) {
