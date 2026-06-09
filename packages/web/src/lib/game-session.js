@@ -37,6 +37,13 @@ export class PlayerSession {
     // (e.g. a peer's next-hand CommitSeed reaching us before we've advanced
     // past the previous hand). Retried after every successful state change.
     this._pending = [];
+    // Publish-seq slots of our OWN actions this session has emitted or
+    // replayed. On a page reload we resubscribe to our own repo and replay it
+    // alongside the peers' — slots the resumed agent has already re-derived
+    // and re-emitted must be dropped, not re-applied. Identity is (self, seq):
+    // action payloads alone aren't unique (two checks are byte-identical), so
+    // content-based dedup would eat legitimate actions.
+    this._selfSeqsDone = new Set();
   }
 
   async receiveTable(tableCbor) {
@@ -45,15 +52,27 @@ export class PlayerSession {
     await this._drainPending();
   }
 
-  async receiveAction(actionCbor) {
+  /**
+   * Feed an action record. `fromSelf`/`seq` identify records from our own
+   * repo (live echo or reload replay): slots we've already emitted are
+   * dropped, while ones that apply (our past bets — human choices, not
+   * re-derivable from the seed) claim their original publish-seq slot so
+   * future rkeys don't collide with existing records.
+   */
+  async receiveAction(actionCbor, { fromSelf = false, seq = null } = {}) {
+    if (fromSelf && this._selfSeqsDone.has(seq)) return;
     try {
       const out = this.agent.receive_action(actionCbor);
+      if (fromSelf) {
+        this._selfSeqsDone.add(seq);
+        this.seq = Math.max(this.seq, seq + 1);
+      }
       await this._processOutput(out);
     } catch (e) {
       // Not valid in our current phase yet — buffer and retry on the next
       // successful transition rather than dropping it (the firehose won't
       // redeliver, so dropping would deadlock the hand boundary).
-      this._pending.push(actionCbor);
+      this._pending.push({ cbor: actionCbor, fromSelf, seq });
       return;
     }
     await this._drainPending();
@@ -82,13 +101,22 @@ export class PlayerSession {
       progress = false;
       const queue = this._pending;
       this._pending = [];
-      for (const cbor of queue) {
+      for (const item of queue) {
+        if (item.fromSelf && this._selfSeqsDone.has(item.seq)) {
+          // Re-derived and emitted while this copy sat in the buffer — drop.
+          progress = true;
+          continue;
+        }
         try {
-          const out = this.agent.receive_action(cbor);
+          const out = this.agent.receive_action(item.cbor);
+          if (item.fromSelf) {
+            this._selfSeqsDone.add(item.seq);
+            this.seq = Math.max(this.seq, item.seq + 1);
+          }
           await this._processOutput(out);
           progress = true;
         } catch {
-          this._pending.push(cbor);
+          this._pending.push(item);
         }
       }
     }
@@ -105,6 +133,9 @@ export class PlayerSession {
       for (let i = 0; i < output.action_count; i++) {
         const cbor = new Uint8Array(output.action(i));
         const mySeq = this.seq++;
+        // Emitted slots count as done — the copy that comes back from our
+        // own repo (live echo or reload replay) must not re-apply.
+        this._selfSeqsDone.add(mySeq);
         this.publishing = this.publishing.then(() => this.publishAction({ seq: mySeq, cbor }));
       }
       await this.publishing;

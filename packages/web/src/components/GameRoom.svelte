@@ -146,15 +146,20 @@
       addLog(isSpectator ? "Watching table…" : "Joining table…");
       await _session.receiveTable(tableCbor);
 
-      const peerDids = playerDids.filter((d) => d !== session.did);
+      // Subscribe to EVERY player's repo — including our own. Replaying our
+      // own records is what makes a page reload resumable: re-derivable
+      // actions arrive as duplicates and are dropped, while our past bets
+      // (human choices, not re-derivable from the seed) re-apply.
       _firehose = new FirehoseSubscriber({
-        peerDids,
+        peerDids: playerDids,
         tableUri,
         ownPdsUri: session.pdsUri,
         onAction: async (did, seq, cbor) => {
-          addLog(`${nameFor(did)}: ${actionLabel(cbor)}`);
+          const fromSelf = did === session.did;
+          // Own records are already logged at publish time.
+          if (!fromSelf) addLog(`${nameFor(did)}: ${actionLabel(cbor)}`);
           try {
-            await _session.receiveAction(cbor);
+            await _session.receiveAction(cbor, { fromSelf, seq });
           } catch (e) {
             console.warn(`receiveAction(${did}@${seq}) failed:`, e?.message || e);
           }
@@ -268,12 +273,15 @@
       return;
     }
 
-    // Auto-advance to the next hand after a readable pause. A spectator
-    // catching up on a game in progress (buffered actions waiting) skips the
-    // pause — those hands are history, not suspense.
+    // Auto-advance to the next hand after a readable pause. Anyone catching
+    // up on history skips the pause — those hands are replay, not suspense.
+    // (A live boundary has at most one pending CommitSeed per peer; a backlog
+    // bigger than the roster means we're replaying.)
     if (!_advanceTimer) {
-      const delay = isSpectator && _session.pendingCount > 0 ? 250 : NEXT_HAND_DELAY;
-      _advanceTimer = setTimeout(advanceHand, delay);
+      const catchingUp = isSpectator
+        ? _session.pendingCount > 0
+        : _session.pendingCount > playerDids.length;
+      _advanceTimer = setTimeout(advanceHand, catchingUp ? 250 : NEXT_HAND_DELAY);
     }
   }
 
