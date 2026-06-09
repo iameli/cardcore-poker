@@ -6,7 +6,7 @@
   import PasswordGate from "./components/PasswordGate.svelte";
   import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
   import { restoreDemoSession, clearDemoSession } from "./lib/demo-pds.js";
-  import { fetchTableRecord } from "./lib/transport.js";
+  import { fetchTableRecord, AUTH_EXPIRED_EVENT } from "./lib/transport.js";
 
   // Temporary soft-launch gate — remove before going live properly.
   let unlocked = $state(
@@ -36,6 +36,27 @@
     return p.startsWith("at://") ? p : null;
   }
 
+  // When the PDS rejects our credentials mid-flight (expired OAuth token),
+  // remember where the user was, drop them at sign-in, and let routeAfterAuth
+  // take them back after they re-authenticate.
+  $effect(() => {
+    const onExpired = () => {
+      if (page === "signin") return;
+      try {
+        sessionStorage.setItem("cardcore_return_to", window.location.pathname);
+      } catch {}
+      // Purge the broken OAuth session so it isn't restored as-is. Demo
+      // sessions stay — re-entering demo mode reuses the same account.
+      if (session && !session.isDemo) signOut().catch(() => {});
+      session = null;
+      tableUri = null;
+      roomUri = null;
+      page = "signin";
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  });
+
   // After auth resolves, route to the table deep link if present, else the
   // lobby. A deep-linked table routes by its record: a published roster (2+
   // players, or startedAt set) means the game is live — enter the GameRoom,
@@ -43,7 +64,19 @@
   // room — go to the join lobby.
   function routeAfterAuth(s) {
     session = s;
-    const deep = readRoomUriFromPath();
+    let deep = readRoomUriFromPath();
+    // Coming back from a forced re-auth: the OAuth redirect may have landed
+    // us on the redirect path instead of where the user was — restore it.
+    try {
+      const returnTo = sessionStorage.getItem("cardcore_return_to");
+      if (returnTo) {
+        sessionStorage.removeItem("cardcore_return_to");
+        if (!deep) {
+          window.history.replaceState({}, "", returnTo);
+          deep = readRoomUriFromPath();
+        }
+      }
+    } catch {}
     if (!deep) {
       page = "lobby";
       return;

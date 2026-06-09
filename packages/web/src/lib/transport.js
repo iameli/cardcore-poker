@@ -45,6 +45,21 @@ function rkeyForSeq(tableTid, seq) {
 }
 
 /**
+ * Fired on `window` when the PDS rejects our credentials (expired/invalid
+ * token). App.svelte listens, bounces the user through sign-in, and returns
+ * them to the page they were on.
+ */
+export const AUTH_EXPIRED_EVENT = "cardcore:auth-expired";
+
+function notifyAuthExpired() {
+  try {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  } catch {
+    // not in a browser (tests/tools) — caller still gets the thrown error
+  }
+}
+
+/**
  * Walk a value and turn Uint8Array values into `{ $bytes: base64 }`. This
  * is what AT Protocol's JSON wire format expects, and what @atcute's Client
  * passes through unchanged in JSON.stringify (which would otherwise emit a
@@ -109,6 +124,7 @@ export class Publisher {
       input: { repo: this.did, collection, record },
     });
     if (!res.ok) {
+      if (res.status === 401) notifyAuthExpired();
       throw new Error(
         `createRecord(${collection}) failed: ${res.status} ${JSON.stringify(res.data)}`,
       );
@@ -121,6 +137,7 @@ export class Publisher {
       input: { repo: this.did, collection, rkey, record },
     });
     if (!res.ok) {
+      if (res.status === 401) notifyAuthExpired();
       throw new Error(
         `putRecord(${collection}/${rkey}) failed: ${res.status} ${JSON.stringify(res.data)}`,
       );
