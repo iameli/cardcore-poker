@@ -96,6 +96,13 @@ test.describe("multiplayer (PDS-only)", () => {
     const actingPage = acted === "A" ? a.page : b.page;
     await expect(actingPage.getByRole("button", { name: /^RAISE$/ })).toBeVisible();
 
+    // The layout holds still across turn changes: the acting player's bar
+    // (buttons) and the waiting player's bar (placeholder text) are the same
+    // height, so the scaled game doesn't jump.
+    const heightOf = (p: Page) =>
+      p.locator(".fit-content").evaluate((el) => (el as HTMLElement).clientHeight);
+    expect(Math.abs((await heightOf(a.page)) - (await heightOf(b.page)))).toBeLessThanOrEqual(1);
+
     // DIDs should only be a fallback — A's table shows B by handle.
     await expect(a.page.getByText(handleB).first()).toBeVisible({ timeout: 15_000 });
 
@@ -113,7 +120,9 @@ test.describe("multiplayer (PDS-only)", () => {
       await expect(page.getByTestId("phase")).toHaveText(/showdown/, { timeout: 30_000 });
     }
 
-    // The log anchors to the bottom as entries stream in…
+    // The log anchors to the bottom as entries stream in… (shrink the window
+    // so the log is guaranteed to overflow its panel)
+    await a.page.setViewportSize({ width: 1100, height: 360 });
     const log = a.page.locator(".log-entries");
     await expect
       .poll(() => log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 10))

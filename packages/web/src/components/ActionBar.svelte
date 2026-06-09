@@ -1,5 +1,5 @@
 <script>
-  let { actions = [], raise = null, onAction, isOurTurn = false } = $props();
+  let { actions = [], raise = null, onAction, isOurTurn = false, placeholder = "" } = $props();
 
   let raiseAmount = $state(0);
   let showRaiseSlider = $state(false);
@@ -26,8 +26,12 @@
   }
 </script>
 
-{#if actions.length > 0 && isOurTurn}
-  <div class="action-bar">
+<!-- The bar always renders at the same height: buttons when it's our turn,
+     an identically-sized placeholder line otherwise — so the layout doesn't
+     jump every time the turn changes. (The raise panel below still expands;
+     that's deliberate.) -->
+<div class="action-bar">
+  {#if actions.length > 0 && isOurTurn}
     {#each actions as action}
       {#if action.type === "raise"}
         <button class="action-btn raise" onclick={() => doAction(action)}>
@@ -39,27 +43,33 @@
         </button>
       {/if}
     {/each}
-  </div>
-
-  {#if showRaiseSlider && raise}
-    <div class="raise-panel">
-      <div class="quick-btns">
-        {#each raise.quickAmounts as q}
-          <button
-            class="quick-btn"
-            onclick={() => (raiseAmount = q.amount)}
-            class:active={raiseAmount === q.amount}
-          >
-            {q.label}<br /><span class="quick-val">{q.amount}</span>
-          </button>
-        {/each}
-      </div>
-      <div class="slider-row">
-        <input type="range" min={raise.min} max={raise.max} bind:value={raiseAmount} />
-        <span class="slider-val">{raiseAmount}</span>
-      </div>
-    </div>
+  {:else}
+    <!-- A de-chromed disabled button: its metrics match the real buttons
+         exactly, so the bar height never changes. -->
+    <button class="action-btn placeholder" disabled tabindex="-1">
+      {placeholder || "\u00a0"}
+    </button>
   {/if}
+</div>
+
+{#if showRaiseSlider && raise && isOurTurn}
+  <div class="raise-panel">
+    <div class="quick-btns">
+      {#each raise.quickAmounts as q}
+        <button
+          class="quick-btn"
+          onclick={() => (raiseAmount = q.amount)}
+          class:active={raiseAmount === q.amount}
+        >
+          {q.label}<br /><span class="quick-val">{q.amount}</span>
+        </button>
+      {/each}
+    </div>
+    <div class="slider-row">
+      <input type="range" min={raise.min} max={raise.max} bind:value={raiseAmount} />
+      <span class="slider-val">{raiseAmount}</span>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -71,7 +81,14 @@
     flex-wrap: wrap;
   }
   .action-btn {
-    padding: 0.6rem 1rem;
+    /* Fixed height + flex centering, NOT vertical padding: stray glyphs that
+       fall back to a non-pixel font (e.g. "…") would otherwise grow the line
+       box and shift the whole layout. */
+    height: 1.7rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 1rem;
     border: 2px solid #1a1a1a;
     border-radius: 0;
     font-family: inherit;
@@ -82,6 +99,18 @@
     background: #ffffff;
     color: #1a1a1a;
     box-shadow: 3px 3px 0 #1a1a1a;
+  }
+  .action-btn.placeholder,
+  .action-btn.placeholder:hover,
+  .action-btn.placeholder:active {
+    background: transparent;
+    color: #1a1a1a;
+    border-color: transparent;
+    box-shadow: none;
+    cursor: default;
+    pointer-events: none;
+    opacity: 0.5;
+    transform: none;
   }
   .action-btn:hover {
     transform: translate(2px, 2px);
