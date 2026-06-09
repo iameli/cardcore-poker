@@ -38,6 +38,22 @@
   let copied = $state(false);
   let gameOver = $state(false);
   let isSpectator = $state(false);
+  // Portrait-mode game log sheet (slides up from the bottom).
+  let logOpen = $state(false);
+
+  // ─── Scale-to-fit ───────────────────────────────────────────────
+  // The play area renders at a fixed design width and is uniformly scaled
+  // (transform) so the whole game always fits the viewport — no scrolling.
+  // Measured sizes are layout sizes, which transforms don't affect, so this
+  // doesn't feed back into itself.
+  const DESIGN_W = 900;
+  let fitBoxW = $state(0);
+  let fitBoxH = $state(0);
+  let fitContentH = $state(0);
+  const fitScale = $derived.by(() => {
+    if (!fitBoxW || !fitBoxH || !fitContentH) return 1;
+    return Math.min(fitBoxW / DESIGN_W, fitBoxH / fitContentH, 2);
+  });
 
   // Pause between hands so players can read the showdown result before the
   // next hand is dealt.
@@ -444,52 +460,64 @@
   {/if}
 
   <div class="main-area">
-    {#if !tableRecord}
-      <p class="loading">Loading table…</p>
-    {:else}
-      <div class="game-layout">
-        <div class="table-wrapper">
-          <PokerTable
-            players={playerMap}
-            playerOrder={playerDids}
-            playerDids={playerDidsMap}
-            handleMap={handleByDid}
-            holeCards={decryptedHoleCards}
-            {communityCards}
-            {pot}
-            currentPlayer={actionOnDid}
-            ourPlayerId={session?.did}
-            {gamePhase}
-            showAllCards={gamePhase === "showdown"}
-          />
-        </div>
+    <!-- Landscape: a static panel on the left of the game. Portrait: a sheet
+         that slides up from the bottom, toggled by the Log button. -->
+    <aside class="log-panel" class:open={logOpen}>
+      <GameLog events={logEvents} />
+    </aside>
 
-        <div class="bottom-panel">
-          {#if isSpectator}
-            <div class="spectating" data-testid="spectating">
-              👁 Spectating{actionOnDid ? ` — ${nameFor(actionOnDid)} to act` : ""}
-            </div>
-          {:else}
-            <ActionBar
-              actions={availableActions}
-              raise={raiseContext}
-              onAction={handleAction}
-              {isOurTurn}
+    <div class="fit-box" bind:clientWidth={fitBoxW} bind:clientHeight={fitBoxH}>
+      <div class="fit-content" bind:clientHeight={fitContentH} style="transform: scale({fitScale})">
+        {#if !tableRecord}
+          <p class="loading">Loading table…</p>
+        {:else}
+          <div class="table-wrapper">
+            <PokerTable
+              players={playerMap}
+              playerOrder={playerDids}
+              playerDids={playerDidsMap}
+              handleMap={handleByDid}
+              holeCards={decryptedHoleCards}
+              {communityCards}
+              {pot}
+              currentPlayer={actionOnDid}
+              ourPlayerId={session?.did}
+              {gamePhase}
+              showAllCards={gamePhase === "showdown"}
             />
-            {#if !isOurTurn && actionOnDid && actionOnDid !== session?.did}
-              <div class="waiting-turn">Waiting for {nameFor(actionOnDid)} to act…</div>
+          </div>
+
+          <div class="bottom-panel">
+            {#if isSpectator}
+              <div class="spectating" data-testid="spectating">
+                👁 Spectating{actionOnDid ? ` — ${nameFor(actionOnDid)} to act` : ""}
+              </div>
+            {:else}
+              <ActionBar
+                actions={availableActions}
+                raise={raiseContext}
+                onAction={handleAction}
+                {isOurTurn}
+                placeholder={!isOurTurn && actionOnDid && actionOnDid !== session?.did
+                  ? `Waiting for ${nameFor(actionOnDid)} to act…`
+                  : ""}
+              />
             {/if}
-          {/if}
-          <GameLog events={logEvents} />
-        </div>
+          </div>
+        {/if}
       </div>
-    {/if}
+    </div>
   </div>
+
+  <button class="log-toggle" onclick={() => (logOpen = !logOpen)} data-testid="log-toggle">
+    {logOpen ? "▼ hide log" : "▲ log"}
+  </button>
 </div>
 
 <style>
   .game-room {
-    min-height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     background: #ffffff;
@@ -595,20 +623,34 @@
   }
   .main-area {
     flex: 1;
-    padding: 0.75rem;
+    min-height: 0;
     display: flex;
-    flex-direction: column;
+    overflow: hidden;
   }
-  .game-layout {
+  /* The game renders at DESIGN_W and is transform-scaled to fit this box,
+     so the whole table is always visible regardless of screen size. The
+     flexbox centers the unscaled frame; the scale pulls any overflow back
+     inside the box. */
+  .fit-box {
     flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .fit-content {
+    flex: none;
+    width: 900px; /* DESIGN_W */
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    padding: 0.75rem;
   }
   .table-wrapper {
-    flex: 1;
     display: flex;
     align-items: center;
+    justify-content: center;
   }
   .bottom-panel {
     display: flex;
@@ -618,12 +660,70 @@
     margin: 0 auto;
     width: 100%;
   }
-  .waiting-turn {
-    text-align: center;
-    font-size: 0.4rem;
-    color: #1a1a1a;
-    opacity: 0.5;
-    padding: 0.5rem;
+
+  /* ── Game log placement ──
+     Landscape: a fixed-width panel to the LEFT of the game.
+     Portrait: a bottom sheet toggled by the floating Log button. */
+  .log-panel {
+    background: #ffffff;
+  }
+  @media (orientation: landscape) {
+    .log-panel {
+      flex: none;
+      width: 260px;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 0.5rem;
+      border-right: 3px solid #1a1a1a;
+    }
+    .log-panel :global(.game-log) {
+      flex: 1;
+      min-height: 0;
+      max-height: none;
+    }
+    .log-toggle {
+      display: none;
+    }
+  }
+  @media (orientation: portrait) {
+    .log-panel {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      padding: 0.5rem;
+      border-top: 3px solid #1a1a1a;
+      transform: translateY(100%);
+      transition: transform 0.25s ease;
+    }
+    .log-panel.open {
+      transform: translateY(0);
+    }
+    .log-panel :global(.game-log) {
+      max-height: 40dvh;
+    }
+    .log-toggle {
+      position: fixed;
+      right: 0.6rem;
+      bottom: 0.6rem;
+      z-index: 21;
+      font-family: inherit;
+      font-size: 0.4rem;
+      letter-spacing: 1px;
+      padding: 0.4rem 0.7rem;
+      background: #1a1a1a;
+      color: #ffffff;
+      border: 2px solid #1a1a1a;
+      border-radius: 0;
+      cursor: pointer;
+      box-shadow: 3px 3px 0 rgba(26, 26, 26, 0.4);
+    }
+    .log-toggle:hover {
+      background: #c0392b;
+      border-color: #c0392b;
+    }
   }
   .spectating {
     text-align: center;
