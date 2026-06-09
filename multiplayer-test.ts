@@ -259,7 +259,8 @@ async function writeActions(player: Player, output: any, tableDid: string) {
   for (let i = 0; i < output.action_count; i++) {
     const cbor = output.action(i);
     const seq = seqTracker.get(player.did) || 0;
-    const rkey = `${TABLE_RKEY}-${seq}`;
+    // Zero-padded so rkey order matches seq order (see web/src/lib/transport.js).
+    const rkey = `${TABLE_RKEY}-${String(seq).padStart(9, "0")}`;
     const decoded = cborDecode(Buffer.from(cbor));
 
     actionStore.set(`${player.did}:${rkey}`, cbor);

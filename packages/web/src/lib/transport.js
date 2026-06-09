@@ -7,8 +7,14 @@
 import * as dagCbor from "@ipld/dag-cbor";
 import { buildActionRecord, buildTableRecord, LEXICONS } from "./atproto-publisher.js";
 
+/**
+ * Action rkeys are `<tableTid>-<seq>` with the seq zero-padded to 9 digits so
+ * lexicographic rkey order matches numeric seq order (unpadded, "-10" sorted
+ * before "-2"). Caps a game at 1,000,000,000 actions, which is plenty.
+ */
 function rkeyForSeq(tableTid, seq) {
-  return `${tableTid}-${seq}`;
+  if (seq >= 1_000_000_000) throw new Error(`action seq ${seq} exceeds rkey padding`);
+  return `${tableTid}-${String(seq).padStart(9, "0")}`;
 }
 
 /**
