@@ -17,6 +17,10 @@ export class WasmAgent {
      */
     community_cards(): string;
     /**
+     * Whether the whole game is over (at most one player has chips).
+     */
+    game_over(): boolean;
+    /**
      * Get game state as JSON: pot, chips, bets, actionOn, players.
      */
     game_state(): string;
@@ -25,9 +29,18 @@ export class WasmAgent {
      */
     hole_cards(): string;
     /**
+     * JSON of the most recently completed hand's result, or "" if none yet.
+     */
+    last_hand_result(): string;
+    /**
      * Create a new agent with a DID and secret seed.
      */
     constructor(did: string, seed: Uint8Array);
+    /**
+     * Advance to the next hand (call after the current hand is Complete and the
+     * game isn't over). Returns this player's actions for the new hand.
+     */
+    next_hand(): WasmOutput;
     /**
      * Get the current protocol phase.
      * Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Dealing", "Betting", "Showdown", "Complete"
@@ -80,9 +93,12 @@ export interface InitOutput {
     readonly wasmagent_bet: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_check_status: (a: number) => [number, number, number];
     readonly wasmagent_community_cards: (a: number) => [number, number];
+    readonly wasmagent_game_over: (a: number) => number;
     readonly wasmagent_game_state: (a: number) => [number, number];
     readonly wasmagent_hole_cards: (a: number) => [number, number];
+    readonly wasmagent_last_hand_result: (a: number) => [number, number];
     readonly wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmagent_next_hand: (a: number) => [number, number, number];
     readonly wasmagent_phase: (a: number) => [number, number];
     readonly wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];

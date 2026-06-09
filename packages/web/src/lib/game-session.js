@@ -33,25 +33,74 @@ export class PlayerSession {
     this.publishing = Promise.resolve();
     this._needsBet = false;
     this._betOptions = [];
+    // Actions that arrived before our agent was in a phase to accept them
+    // (e.g. a peer's next-hand CommitSeed reaching us before we've advanced
+    // past the previous hand). Retried after every successful state change.
+    this._pending = [];
   }
 
   async receiveTable(tableCbor) {
     const out = this.agent.receive_table(tableCbor);
     await this._processOutput(out);
+    await this._drainPending();
   }
 
   async receiveAction(actionCbor) {
-    const out = this.agent.receive_action(actionCbor);
-    await this._processOutput(out);
+    try {
+      const out = this.agent.receive_action(actionCbor);
+      await this._processOutput(out);
+    } catch (e) {
+      // Not valid in our current phase yet — buffer and retry on the next
+      // successful transition rather than dropping it (the firehose won't
+      // redeliver, so dropping would deadlock the hand boundary).
+      this._pending.push(actionCbor);
+      return;
+    }
+    await this._drainPending();
   }
 
   async bet(action) {
     const out = this.agent.bet(action);
     await this._processOutput(out);
+    await this._drainPending();
+  }
+
+  /**
+   * Advance to the next hand after the current one is Complete. Emits this
+   * player's CommitSeed for the new hand. No-op if the game is over.
+   */
+  async nextHand() {
+    const out = this.agent.next_hand();
+    await this._processOutput(out);
+    await this._drainPending();
+  }
+
+  /** Retry buffered actions until none can make progress. */
+  async _drainPending() {
+    let progress = true;
+    while (progress && this._pending.length) {
+      progress = false;
+      const queue = this._pending;
+      this._pending = [];
+      for (const cbor of queue) {
+        try {
+          const out = this.agent.receive_action(cbor);
+          await this._processOutput(out);
+          progress = true;
+        } catch {
+          this._pending.push(cbor);
+        }
+      }
+    }
   }
 
   async _processOutput(output) {
-    if (output.kind === "actions") {
+    // Drain emitted actions, re-checking after each batch. Emitting an action
+    // can advance us into our OWN turn — e.g. when we contribute the reveal
+    // that completes a community deal and we're first to act on the new street.
+    // The agent reports actions XOR a bet prompt, so without re-polling we'd
+    // never surface that bet and the table would stall.
+    while (output.kind === "actions") {
       // Serialize publishes so putRecord calls land on the PDS in seq order.
       for (let i = 0; i < output.action_count; i++) {
         const cbor = new Uint8Array(output.action(i));
@@ -61,7 +110,10 @@ export class PlayerSession {
       await this.publishing;
       this._needsBet = false;
       this._betOptions = [];
-    } else if (output.kind === "need_bet") {
+      output = this.agent.check_status();
+    }
+
+    if (output.kind === "need_bet") {
       this._needsBet = true;
       try {
         this._betOptions = JSON.parse(output.bet_options);
@@ -127,6 +179,25 @@ export class PlayerSession {
 
   get betOptions() {
     return this._betOptions;
+  }
+
+  /** Result of the most recently completed hand, or null. */
+  get lastHandResult() {
+    try {
+      const json = this.agent.last_hand_result();
+      return json ? JSON.parse(json) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Whether the whole game is over (one player holds all the chips). */
+  get gameOver() {
+    try {
+      return this.agent.game_over();
+    } catch {
+      return false;
+    }
   }
 
   destroy() {

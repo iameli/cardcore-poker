@@ -143,6 +143,25 @@ impl WasmAgent {
             .map(to_wasm_output)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
+
+    /// Advance to the next hand (call after the current hand is Complete and the
+    /// game isn't over). Returns this player's actions for the new hand.
+    pub fn next_hand(&mut self) -> Result<WasmOutput, JsValue> {
+        self.inner
+            .next_hand()
+            .map(to_wasm_output)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// JSON of the most recently completed hand's result, or "" if none yet.
+    pub fn last_hand_result(&self) -> String {
+        self.inner.last_hand_result_json().unwrap_or_default()
+    }
+
+    /// Whether the whole game is over (at most one player has chips).
+    pub fn game_over(&self) -> bool {
+        self.inner.game_over()
+    }
 }
 
 /// Simulate a complete game and return events as JSON.

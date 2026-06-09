@@ -555,3 +555,23 @@ fn format_bet(bet: &BetAction) -> String {
         BetAction::Raise(a) => format!("raise:{}", a),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sim_passive_two_players_completes() {
+        let mut sim = Simulator::new(SimConfig {
+            num_players: 2,
+            starting_chips: 1000,
+            small_blind: 10,
+            strategy: BotStrategy::Passive,
+            rng_seed: 7,
+        })
+        .unwrap();
+        let r = sim.run();
+        assert!(r.is_ok(), "sim run errored: {:?}", r.err());
+        assert!(sim.all_complete(), "agents did not all reach Complete");
+    }
+}

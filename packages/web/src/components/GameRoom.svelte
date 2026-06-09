@@ -32,13 +32,19 @@
   let raiseContext = $state(null);
   let isOurTurn = $state(false);
   let copied = $state(false);
+  let gameOver = $state(false);
+
+  // Pause between hands so players can read the showdown result before the
+  // next hand is dealt.
+  const NEXT_HAND_DELAY = 4000;
 
   let _publisher = null;
   let _session = null;
   let _firehose = null;
   let _tableTid = null;
   let _tableCid = null;
-  let _handOver = false;
+  let _loggedHandIndex = -1;
+  let _advanceTimer = null;
 
   function addLog(msg) {
     logEvents = [...logEvents, msg];
@@ -125,6 +131,7 @@
   });
 
   onDestroy(() => {
+    if (_advanceTimer) clearTimeout(_advanceTimer);
     _firehose?.stop();
     _session?.destroy();
   });
@@ -199,14 +206,8 @@
     else if (commLen >= 4) uiPhase = "turn";
     else if (commLen >= 3) uiPhase = "flop";
 
-    if (_session.isComplete && !_handOver) {
-      _handOver = true;
-      const winner = playerDids.find((d) => !foldedByDid[d]);
-      if (winner) {
-        addLog(`${shortDid(winner)} wins ${pot} chips!`);
-      } else {
-        addLog("Hand complete.");
-      }
+    if (_session.isComplete) {
+      handleHandComplete();
     }
 
     if (_session.needsBet) {
@@ -224,6 +225,59 @@
       isOurTurn = false;
       availableActions = [];
       raiseContext = null;
+    }
+  }
+
+  // Hand finished: log the result once, then either declare the game over or
+  // schedule the next hand to start automatically.
+  function handleHandComplete() {
+    const result = _session.lastHandResult;
+    if (result && result.hand_index > _loggedHandIndex) {
+      _loggedHandIndex = result.hand_index;
+      logHandResult(result);
+    }
+
+    if (_session.gameOver) {
+      if (!gameOver) {
+        gameOver = true;
+        const winnerDid = playerDids.find((d) => (chipsByDid[d] ?? 0) > 0);
+        addLog(`🏆 Game over — ${shortDid(winnerDid)} wins!`);
+      }
+      return;
+    }
+
+    // Auto-advance to the next hand after a readable pause.
+    if (!_advanceTimer) {
+      _advanceTimer = setTimeout(advanceHand, NEXT_HAND_DELAY);
+    }
+  }
+
+  function logHandResult(result) {
+    addLog(`— Hand ${result.hand_index + 1} results —`);
+    if (!result.by_fold) {
+      for (const s of result.shown || []) {
+        addLog(`  ${shortDid(playerDids[s.seat])}: ${s.cards.join(" ")} — ${s.hand_desc}`);
+      }
+    }
+    for (const pot of result.pots || []) {
+      const names = pot.winners.map((w) => shortDid(playerDids[w])).join(", ");
+      if (!names) continue;
+      if (result.by_fold) {
+        addLog(`  ${names} wins ${pot.amount} (all others folded)`);
+      } else {
+        addLog(`  ${names} wins ${pot.amount}${pot.hand_desc ? ` with ${pot.hand_desc}` : ""}`);
+      }
+    }
+  }
+
+  async function advanceHand() {
+    _advanceTimer = null;
+    if (!_session || _session.gameOver) return;
+    addLog("Next hand…");
+    try {
+      await _session.nextHand();
+    } catch (e) {
+      console.warn("nextHand failed:", e?.message || e);
     }
   }
 
@@ -343,6 +397,10 @@
 
   {#if error}
     <div class="error-banner">{error}</div>
+  {/if}
+
+  {#if gameOver}
+    <div class="gameover-banner" data-testid="game-over">🏆 Game over — winner takes all</div>
   {/if}
 
   <div class="main-area">
@@ -473,6 +531,14 @@
     padding: 0.5rem;
     text-align: center;
     font-size: 0.45rem;
+  }
+  .gameover-banner {
+    background: #1a7a3a;
+    color: #ffffff;
+    padding: 0.6rem;
+    text-align: center;
+    font-size: 0.55rem;
+    letter-spacing: 1px;
   }
   .loading {
     text-align: center;

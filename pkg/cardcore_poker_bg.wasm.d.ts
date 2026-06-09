@@ -7,9 +7,12 @@ export const simulate_game: (a: number, b: bigint, c: bigint, d: number, e: numb
 export const wasmagent_bet: (a: number, b: number, c: number) => [number, number, number];
 export const wasmagent_check_status: (a: number) => [number, number, number];
 export const wasmagent_community_cards: (a: number) => [number, number];
+export const wasmagent_game_over: (a: number) => number;
 export const wasmagent_game_state: (a: number) => [number, number];
 export const wasmagent_hole_cards: (a: number) => [number, number];
+export const wasmagent_last_hand_result: (a: number) => [number, number];
 export const wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const wasmagent_next_hand: (a: number) => [number, number, number];
 export const wasmagent_phase: (a: number) => [number, number];
 export const wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
 export const wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];

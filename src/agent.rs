@@ -28,29 +28,75 @@ pub enum AgentOutput {
 
 pub struct PlayerAgent {
     pub did: String,
-    seed: Vec<u8>,
+    /// The long-lived secret seed supplied at construction. Per-hand seeds are
+    /// derived from it so each hand uses fresh randomness while a single hand's
+    /// seed can still be revealed without compromising the others.
+    master_seed: Vec<u8>,
     keys: PlayerKeys,
     state: ProtocolState,
     seat: Option<usize>,
     seq: i64,
     table_tid: Option<String>,
+    /// Which hand we're playing — must track protocol.hand_index for key derivation.
+    hand_index: u64,
 }
 
 impl PlayerAgent {
     /// Create a new agent with the player's DID and secret seed.
     pub fn new(did: &str, seed: &[u8]) -> crate::Result<Self> {
         crypto::init()?;
-        let mut rng = PlayerRng::new(seed, b"shuffle")?;
+        let master_seed = seed.to_vec();
+        let phs = per_hand_seed(&master_seed, 0)?;
+        let mut rng = PlayerRng::new(&phs, b"shuffle")?;
         let keys = PlayerKeys::generate(&mut rng)?;
         Ok(Self {
             did: did.to_string(),
-            seed: seed.to_vec(),
+            master_seed,
             keys,
             state: ProtocolState::new(),
             seat: None,
             seq: 0,
             table_tid: None,
+            hand_index: 0,
         })
+    }
+
+    /// Seed for the current hand, derived from the master seed and hand index.
+    fn per_hand_seed(&self) -> crate::Result<Vec<u8>> {
+        per_hand_seed(&self.master_seed, self.hand_index)
+    }
+
+    /// Regenerate this hand's shuffle/lock keys from the current per-hand seed.
+    fn rederive_keys(&mut self) -> crate::Result<()> {
+        let phs = self.per_hand_seed()?;
+        let mut rng = PlayerRng::new(&phs, b"shuffle")?;
+        self.keys = PlayerKeys::generate(&mut rng)?;
+        Ok(())
+    }
+
+    /// Advance to the next hand once the current one is Complete. Rotates the
+    /// button, rederives fresh keys, and auto-emits this player's new CommitSeed.
+    pub fn next_hand(&mut self) -> crate::Result<AgentOutput> {
+        if self.state.game_over() {
+            return Ok(AgentOutput::Waiting);
+        }
+        self.state.start_next_hand();
+        self.hand_index = self.state.hand_index;
+        self.rederive_keys()?;
+        self.auto_respond()
+    }
+
+    /// JSON of the most recently completed hand's result, if any.
+    pub fn last_hand_result_json(&self) -> Option<String> {
+        self.state
+            .last_hand_result
+            .as_ref()
+            .and_then(|r| serde_json::to_string(r).ok())
+    }
+
+    /// Whether the whole game is over (at most one player with chips).
+    pub fn game_over(&self) -> bool {
+        self.state.game_over()
     }
 
     /// Feed a DAG-CBOR encoded table record. This starts the game.
@@ -184,6 +230,7 @@ impl PlayerAgent {
                     "bet": p.bet_this_street,
                     "folded": p.folded,
                     "all_in": p.all_in,
+                    "eliminated": p.eliminated,
                 })
             })
             .collect();
@@ -191,6 +238,9 @@ impl PlayerAgent {
             "pot": state.pot,
             "currentBet": state.current_bet,
             "actionOn": state.action_on,
+            "button": state.button,
+            "handIndex": self.state.hand_index,
+            "gameOver": self.state.game_over(),
             "players": players,
         }))
         .unwrap_or_default()
@@ -236,10 +286,15 @@ impl PlayerAgent {
                 None => break,
             };
 
-            // Find an action for us that isn't a bet or verify-seed-we-already-did
-            let my_action = valid
-                .iter()
-                .find(|va| va.player_id == seat && !matches!(va.kind, ValidActionKind::Bet { .. }));
+            // Find a non-interactive action for us (not a bet, and not seed
+            // verification — seeds aren't auto-revealed in a multi-hand game).
+            let my_action = valid.iter().find(|va| {
+                va.player_id == seat
+                    && !matches!(
+                        va.kind,
+                        ValidActionKind::Bet { .. } | ValidActionKind::VerifySeed
+                    )
+            });
 
             let va = match my_action {
                 Some(va) => va.clone(),
@@ -248,7 +303,7 @@ impl PlayerAgent {
 
             match &va.kind {
                 ValidActionKind::CommitSeed => {
-                    let commitment = crypto::blake2b(&self.seed)?;
+                    let commitment = crypto::blake2b(&self.per_hand_seed()?)?;
                     self.state.apply(&Action::CommitSeed {
                         player_id: seat,
                         commitment,
@@ -263,7 +318,8 @@ impl PlayerAgent {
                 }
                 ValidActionKind::ShuffleDeck => {
                     let mut encrypted = self.keys.encrypt_deck(&self.state.game.deck)?;
-                    let mut rng = PlayerRng::new(&self.seed, b"shuffle_permutation")?;
+                    let phs = self.per_hand_seed()?;
+                    let mut rng = PlayerRng::new(&phs, b"shuffle_permutation")?;
                     encrypted.shuffle(rng.as_rng());
 
                     let deck_bytes: Vec<Bytes> = encrypted
@@ -289,7 +345,8 @@ impl PlayerAgent {
                         crypto::blake2b(&serde_json::to_vec(&self.state.game.deck).unwrap())?;
                     let mut context = b"lock:".to_vec();
                     context.extend_from_slice(&deck_hash);
-                    let mut rng = PlayerRng::new(&self.seed, &context)?;
+                    let phs = self.per_hand_seed()?;
+                    let mut rng = PlayerRng::new(&phs, &context)?;
                     self.keys.generate_lock_keys(52, &mut rng)?;
                     let locked = self.keys.lock_deck(&self.state.game.deck)?;
 
@@ -360,18 +417,10 @@ impl PlayerAgent {
                     self.seq += 1;
                 }
                 ValidActionKind::VerifySeed => {
-                    self.state.apply(&Action::VerifySeed {
-                        player_id: seat,
-                        seed: self.seed.clone(),
-                    })?;
-
-                    emitted.push(self.encode_action_union(&ActionAction::VerifySeed(Box::new(
-                        VerifySeed {
-                            seed: Bytes::copy_from_slice(&self.seed),
-                            extra_data: None,
-                        },
-                    )))?);
-                    self.seq += 1;
+                    // Seeds are not auto-revealed across a multi-hand game (a
+                    // revealed seed would expose that hand's deal). Excluded
+                    // from the action search above; unreachable here.
+                    break;
                 }
                 ValidActionKind::Bet { .. } => {
                     // Don't auto-respond to bets
@@ -578,6 +627,16 @@ fn decode_action_cbor<'a>(cbor: &'a [u8]) -> crate::Result<ActionAction<'a>> {
             other
         ))),
     }
+}
+
+/// Derive a per-hand secret seed from the master seed and hand index. Using a
+/// one-way hash means a revealed per-hand seed can't be used to recover the
+/// master seed or any other hand's seed.
+fn per_hand_seed(master_seed: &[u8], hand_index: u64) -> crate::Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(master_seed.len() + 8);
+    data.extend_from_slice(master_seed);
+    data.extend_from_slice(&hand_index.to_le_bytes());
+    Ok(crypto::blake2b(&data)?.to_vec())
 }
 
 /// Find which player should be performing an action of this type.

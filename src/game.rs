@@ -29,8 +29,14 @@ pub enum BetAction {
 pub struct PlayerState {
     pub chips: u64,
     pub bet_this_street: u64,
+    /// Total chips this player has put into the pot across all streets of the
+    /// current hand. Drives side-pot computation at settlement.
+    pub total_committed: u64,
     pub folded: bool,
     pub all_in: bool,
+    /// Permanently out of the game (busted). Still seated so seat indices and
+    /// the cryptographic protocol stay stable, but sits out every hand.
+    pub eliminated: bool,
     /// Encrypted hole cards (2 points, only known to this player until showdown).
     pub hole_encrypted: Vec<Point>,
     /// Decrypted hole cards (filled in once all other players provide decryption shares).
@@ -42,8 +48,10 @@ impl PlayerState {
         Self {
             chips,
             bet_this_street: 0,
+            total_committed: 0,
             folded: false,
             all_in: false,
+            eliminated: false,
             hole_encrypted: Vec::new(),
             hole_points: Vec::new(),
         }
@@ -100,6 +108,24 @@ impl GameState {
         self.players.len()
     }
 
+    /// Players still in the game (not busted/eliminated).
+    pub fn live_player_count(&self) -> usize {
+        self.players.iter().filter(|p| !p.eliminated).count()
+    }
+
+    /// Next seat after `seat` (cyclic) that is still in the game (not eliminated).
+    /// Returns `seat` itself if no other live seat exists.
+    pub fn next_live_seat(&self, seat: usize) -> usize {
+        let n = self.num_players();
+        for i in 1..=n {
+            let idx = (seat + i) % n;
+            if !self.players[idx].eliminated {
+                return idx;
+            }
+        }
+        seat
+    }
+
     /// Players still in the hand (not folded).
     pub fn active_player_count(&self) -> usize {
         self.players.iter().filter(|p| !p.folded).count()
@@ -134,24 +160,22 @@ impl GameState {
         None
     }
 
-    /// The small blind seat (left of button).
+    /// The small blind seat (left of button), skipping eliminated players.
     pub fn small_blind_seat(&self) -> usize {
-        let n = self.num_players();
-        if n == 2 {
+        if self.live_player_count() == 2 {
             // Heads-up: button is SB
             self.button
         } else {
-            (self.button + 1) % n
+            self.next_live_seat(self.button)
         }
     }
 
-    /// The big blind seat.
+    /// The big blind seat, skipping eliminated players.
     pub fn big_blind_seat(&self) -> usize {
-        let n = self.num_players();
-        if n == 2 {
-            (self.button + 1) % n
+        if self.live_player_count() == 2 {
+            self.next_live_seat(self.button)
         } else {
-            (self.button + 2) % n
+            self.next_live_seat(self.small_blind_seat())
         }
     }
 
@@ -163,11 +187,19 @@ impl GameState {
         let sb_amount = self.small_blind.min(self.players[sb_seat].chips);
         self.players[sb_seat].chips -= sb_amount;
         self.players[sb_seat].bet_this_street = sb_amount;
+        self.players[sb_seat].total_committed += sb_amount;
+        if self.players[sb_seat].chips == 0 {
+            self.players[sb_seat].all_in = true;
+        }
         self.pot += sb_amount;
 
         let bb_amount = self.big_blind.min(self.players[bb_seat].chips);
         self.players[bb_seat].chips -= bb_amount;
         self.players[bb_seat].bet_this_street = bb_amount;
+        self.players[bb_seat].total_committed += bb_amount;
+        if self.players[bb_seat].chips == 0 {
+            self.players[bb_seat].all_in = true;
+        }
         self.pot += bb_amount;
 
         self.current_bet = bb_amount;
@@ -230,6 +262,10 @@ impl GameState {
                 let amount = to_call.min(self.players[player_id].chips);
                 self.players[player_id].chips -= amount;
                 self.players[player_id].bet_this_street += amount;
+                self.players[player_id].total_committed += amount;
+                if self.players[player_id].chips == 0 {
+                    self.players[player_id].all_in = true;
+                }
                 self.pot += amount;
             }
             BetAction::Raise(total) => {
@@ -237,6 +273,10 @@ impl GameState {
                 let amount = amount.min(self.players[player_id].chips);
                 self.players[player_id].chips -= amount;
                 self.players[player_id].bet_this_street += amount;
+                self.players[player_id].total_committed += amount;
+                if self.players[player_id].chips == 0 {
+                    self.players[player_id].all_in = true;
+                }
                 self.pot += amount;
                 self.current_bet = self.players[player_id].bet_this_street;
                 // Reset action count — everyone needs to act again
@@ -246,6 +286,7 @@ impl GameState {
                 let amount = self.players[player_id].chips;
                 self.players[player_id].chips = 0;
                 self.players[player_id].bet_this_street += amount;
+                self.players[player_id].total_committed += amount;
                 self.players[player_id].all_in = true;
                 self.pot += amount;
                 if self.players[player_id].bet_this_street > self.current_bet {

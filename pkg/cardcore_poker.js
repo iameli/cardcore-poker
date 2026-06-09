@@ -53,6 +53,14 @@ export class WasmAgent {
         }
     }
     /**
+     * Whether the whole game is over (at most one player has chips).
+     * @returns {boolean}
+     */
+    game_over() {
+        const ret = wasm.wasmagent_game_over(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Get game state as JSON: pot, chips, bets, actionOn, players.
      * @returns {string}
      */
@@ -85,6 +93,22 @@ export class WasmAgent {
         }
     }
     /**
+     * JSON of the most recently completed hand's result, or "" if none yet.
+     * @returns {string}
+     */
+    last_hand_result() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmagent_last_hand_result(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Create a new agent with a DID and secret seed.
      * @param {string} did
      * @param {Uint8Array} seed
@@ -101,6 +125,18 @@ export class WasmAgent {
         this.__wbg_ptr = ret[0] >>> 0;
         WasmAgentFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * Advance to the next hand (call after the current hand is Complete and the
+     * game isn't over). Returns this player's actions for the new hand.
+     * @returns {WasmOutput}
+     */
+    next_hand() {
+        const ret = wasm.wasmagent_next_hand(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmOutput.__wrap(ret[0]);
     }
     /**
      * Get the current protocol phase.
