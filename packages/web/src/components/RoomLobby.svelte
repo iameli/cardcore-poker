@@ -1,8 +1,8 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import { Publisher } from "../lib/transport.js";
+  import { Publisher, fetchTableRecord } from "../lib/transport.js";
   import { JoinRequestWatcher } from "../lib/discovery.js";
-  import { pdsForDid, resolveDidToHandle } from "../lib/atproto.js";
+  import { resolveDidToHandle } from "../lib/atproto.js";
 
   let { session, uri, onStartGame, onLeaveRoom } = $props();
 
@@ -51,22 +51,6 @@
       .catch(() => {});
   }
 
-  async function fetchTableRecord(u) {
-    const m = u.match(/^at:\/\/([^/]+)\/([^/]+)\/(.+)$/);
-    if (!m) throw new Error(`Bad table URI: ${u}`);
-    const [, r, collection, rkey] = m;
-    const pds = await pdsForDid(r, session.pdsUri);
-    const url =
-      `${pds}/xrpc/com.atproto.repo.getRecord` +
-      `?repo=${encodeURIComponent(r)}` +
-      `&collection=${encodeURIComponent(collection)}` +
-      `&rkey=${encodeURIComponent(rkey)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`getRecord(${r}) ${res.status}`);
-    const data = await res.json();
-    return { record: data.value, cid: data.cid };
-  }
-
   onMount(async () => {
     if (!session?.client || !uri) return;
     _publisher = new Publisher({ client: session.client, did: session.did });
@@ -74,7 +58,7 @@
     learnHandle(session.did);
 
     try {
-      const { record } = await fetchTableRecord(uri);
+      const { record } = await fetchTableRecord(uri, session.pdsUri);
       tableInfo = {
         startingChips: record.startingChips,
         smallBlind: record.smallBlind,
@@ -145,7 +129,7 @@
     if (isHost || requested) return;
     error = "";
     try {
-      const { record } = await fetchTableRecord(uri);
+      const { record } = await fetchTableRecord(uri, session.pdsUri);
       const players = record.players || [];
       const roster = players.includes(session.did) ? players : [...players, session.did];
       // Publish our "suggested addition": the host's table at the same rkey on
@@ -165,7 +149,7 @@
 
   async function pollAcceptance() {
     try {
-      const { record } = await fetchTableRecord(uri);
+      const { record } = await fetchTableRecord(uri, session.pdsUri);
       const players = record.players || [];
       if (players.includes(session.did)) {
         accepted = true;

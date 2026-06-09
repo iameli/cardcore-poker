@@ -79,6 +79,10 @@ test.describe("multiplayer (PDS-only)", () => {
     await b.page.getByTestId("join-table").click();
     await expect(b.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
 
+    // The table URL persists for the whole game on both sides.
+    await expect(a.page).toHaveURL(/\/at:\/\//);
+    await expect(b.page).toHaveURL(/\/at:\/\//);
+
     // The cryptographic deal runs over the PDS. One player's UI eventually
     // surfaces an action button when it's their turn.
     const a1 = a.page.getByRole("button", { name: ACTION_RX }).first();

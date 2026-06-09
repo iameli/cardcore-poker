@@ -6,6 +6,33 @@
  */
 import * as dagCbor from "@ipld/dag-cbor";
 import { buildActionRecord, buildTableRecord, LEXICONS } from "./atproto-publisher.js";
+import { pdsForDid } from "./atproto.js";
+
+/**
+ * Fetch a table record by AT URI from its author's PDS (getRecord is public,
+ * no auth needed). Returns { record, cid }.
+ */
+export async function fetchTableRecord(uri, ownPdsUri) {
+  const m = uri.match(/^at:\/\/([^/]+)\/([^/]+)\/(.+)$/);
+  if (!m) throw new Error(`Bad table URI: ${uri}`);
+  const [, repo, collection, rkey] = m;
+  if (collection !== LEXICONS.TABLE) {
+    throw new Error(`URI is not a poker table: ${collection}`);
+  }
+  const pds = await pdsForDid(repo, ownPdsUri);
+  const url =
+    `${pds}/xrpc/com.atproto.repo.getRecord` +
+    `?repo=${encodeURIComponent(repo)}` +
+    `&collection=${encodeURIComponent(collection)}` +
+    `&rkey=${encodeURIComponent(rkey)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`getRecord(${repo}) ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return { record: data.value, cid: data.cid };
+}
 
 /**
  * Action rkeys are `<tableTid>-<seq>` with the seq zero-padded to 9 digits so

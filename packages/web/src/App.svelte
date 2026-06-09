@@ -6,6 +6,7 @@
   import PasswordGate from "./components/PasswordGate.svelte";
   import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
   import { restoreDemoSession, clearDemoSession } from "./lib/demo-pds.js";
+  import { fetchTableRecord } from "./lib/transport.js";
 
   // Temporary soft-launch gate — remove before going live properly.
   let unlocked = $state(
@@ -35,16 +36,32 @@
     return p.startsWith("at://") ? p : null;
   }
 
-  // After auth resolves, route to the room deep link if present, else the lobby.
+  // After auth resolves, route to the table deep link if present, else the
+  // lobby. A deep-linked table routes by its record: a published roster (2+
+  // players, or startedAt set) means the game is live — enter the GameRoom,
+  // whether we're a player in it or not. A lone-host record is still an open
+  // room — go to the join lobby.
   function routeAfterAuth(s) {
     session = s;
     const deep = readRoomUriFromPath();
-    if (deep) {
+    if (!deep) {
+      page = "lobby";
+      return;
+    }
+    (async () => {
+      try {
+        const { record } = await fetchTableRecord(deep, s.pdsUri);
+        if ((record.players?.length ?? 0) >= 2 || record.startedAt) {
+          tableUri = deep;
+          page = "game";
+          return;
+        }
+      } catch (e) {
+        console.warn("Table lookup for deep link failed:", e?.message || e);
+      }
       roomUri = deep;
       page = "roomLobby";
-    } else {
-      page = "lobby";
-    }
+    })();
   }
 
   $effect(() => {
@@ -116,7 +133,8 @@
       tableUri = roomUri;
       page = "game";
       roomUri = null;
-      window.history.replaceState({}, "", "/");
+      // The table URL stays for the whole game — it's the shareable,
+      // reload-safe address of the game itself.
     }
   }
 
@@ -129,11 +147,13 @@
   function onJoinTable(uri) {
     tableUri = uri;
     page = "game";
+    window.history.pushState({}, "", `/${uri}`);
   }
 
   function onLeaveTable() {
     tableUri = null;
     page = "lobby";
+    window.history.replaceState({}, "", "/");
   }
 
   function onSignOut() {

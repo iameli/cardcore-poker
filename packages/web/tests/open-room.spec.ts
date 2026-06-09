@@ -93,6 +93,10 @@ test.describe("open room (PDS-only)", () => {
     await expect(a.page.getByTestId("phase")).toBeVisible({ timeout: 30_000 });
     await expect(b.page.getByTestId("phase")).toBeVisible({ timeout: 30_000 });
 
+    // The table URL persists into (and through) the game on both sides.
+    await expect(a.page).toHaveURL(/\/at:\/\//);
+    await expect(b.page).toHaveURL(/\/at:\/\//);
+
     // The cryptographic deal runs over the firehose; one side gets to act.
     const a1 = a.page.getByRole("button", { name: ACTION_RX }).first();
     const b1 = b.page.getByRole("button", { name: ACTION_RX }).first();

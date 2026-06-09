@@ -6,11 +6,11 @@
   import GameLog from "./GameLog.svelte";
   import { initWasm, parseCard } from "../lib/cardcore-wasm.js";
   import { PlayerSession, generateSeed } from "../lib/game-session.js";
-  import { Publisher } from "../lib/transport.js";
+  import { Publisher, fetchTableRecord } from "../lib/transport.js";
   import { FirehoseSubscriber } from "../lib/firehose.js";
   import { LEXICONS } from "../lib/atproto-publisher.js";
   import { GAME_PHASES } from "../lib/poker-engine.js";
-  import { pdsForDid, resolveHandles } from "../lib/atproto.js";
+  import { resolveHandles } from "../lib/atproto.js";
 
   let { session, tableUri, onLeaveRoom } = $props();
 
@@ -88,7 +88,7 @@
     try {
       await initWasm();
       addLog("Fetching table…");
-      const { record, cid } = await fetchTableRecord(tableUri);
+      const { record, cid } = await fetchTableRecord(tableUri, session.pdsUri);
       tableRecord = record;
       _tableCid = cid;
       _tableTid = tidFromUri(tableUri);
@@ -170,30 +170,6 @@
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────
-
-  async function fetchTableRecord(uri) {
-    const m = uri.match(/^at:\/\/([^/]+)\/([^/]+)\/(.+)$/);
-    if (!m) throw new Error(`Bad table URI: ${uri}`);
-    const [, repo, collection, rkey] = m;
-    if (collection !== LEXICONS.TABLE) {
-      throw new Error(`URI is not a poker table: ${collection}`);
-    }
-    // Records live on the AUTHOR's PDS, not ours. Resolve the repo DID to
-    // its PDS endpoint and do an unauthenticated fetch — getRecord is public.
-    const pds = await pdsForDid(repo, session.pdsUri);
-    const url =
-      `${pds}/xrpc/com.atproto.repo.getRecord` +
-      `?repo=${encodeURIComponent(repo)}` +
-      `&collection=${encodeURIComponent(collection)}` +
-      `&rkey=${encodeURIComponent(rkey)}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`getRecord(${repo}) ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    return { record: data.value, cid: data.cid };
-  }
 
   function restoreOrCreateSeed(uri) {
     const key = `cardcore_seed:${uri}`;
