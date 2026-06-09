@@ -54,7 +54,10 @@ test.describe("reload-resume (PDS-only)", () => {
     await a.page.getByTestId("opponent-handle").fill(handleB);
     await a.page.getByTestId("create-table").click();
     await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tid = await a.page.getByTestId("copy-table-uri").locator("code").innerText();
+    const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
+      .trim()
+      .split("/")
+      .pop()!;
     const didA = await a.page.evaluate(
       () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
     );

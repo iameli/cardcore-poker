@@ -33,7 +33,10 @@ test("local player is in the bottom-row from each perspective", async ({ browser
   await a.page.getByTestId("create-table").click();
   await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
 
-  const tid = await a.page.getByTestId("copy-table-uri").locator("code").innerText();
+  const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
+    .trim()
+    .split("/")
+    .pop()!;
   const didA = await a.page.evaluate(
     () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
   );

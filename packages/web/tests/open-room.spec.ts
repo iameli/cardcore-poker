@@ -69,7 +69,10 @@ test.describe("open room (PDS-only)", () => {
     await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
 
     // Reconstruct the room URI from A's DID + the shared tid.
-    const tid = await a.page.getByTestId("copy-table-uri").locator("code").innerText();
+    const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
+      .trim()
+      .split("/")
+      .pop()!;
     const tableUri = `at://${didA}/re.cardco.poker.table/${tid.trim()}`;
     console.log(`open room: ${tableUri}`);
 

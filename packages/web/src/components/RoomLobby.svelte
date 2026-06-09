@@ -229,7 +229,7 @@
         <h3>Share This Link</h3>
         <p class="hint">Send this to players you want to invite:</p>
         <div class="uri-container" data-testid="copy-table-uri">
-          <code>{tid}</code>
+          <code>{nameFor(repo)}/{tid}</code>
           <button class="btn secondary" onclick={copyLink} data-testid="copy-uri-button">
             {copied ? "Copied!" : "Copy"}
           </button>

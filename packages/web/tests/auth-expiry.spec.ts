@@ -35,7 +35,10 @@ test.describe("auth expiry (PDS-only)", () => {
     // A opens a room; B lands on its join page.
     await a.page.getByTestId("create-open-room").click();
     await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tid = await a.page.getByTestId("copy-table-uri").locator("code").innerText();
+    const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
+      .trim()
+      .split("/")
+      .pop()!;
     const didA = await a.page.evaluate(
       () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
     );

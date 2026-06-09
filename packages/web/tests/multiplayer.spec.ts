@@ -66,13 +66,23 @@ test.describe("multiplayer (PDS-only)", () => {
 
     // After create, A is in GameRoom; pull the table URI from the share button
     await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
-    const tableTid = await a.page.getByTestId("copy-table-uri").locator("code").innerText();
+    const tableTid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
+      .trim()
+      .split("/")
+      .pop()!;
     // Reconstruct the URI from A's DID and the tid
     const didA = await a.page.evaluate(
       () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
     );
     const tableUri = `at://${didA}/re.cardco.poker.table/${tableTid}`;
     console.log(`tableUri=${tableUri}`);
+
+    // The copy button puts the FULL shareable URL on the clipboard — ready to
+    // paste into a browser — while displaying host/tid.
+    await a.ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await a.page.getByTestId("copy-table-uri").click();
+    const copiedUrl = await a.page.evaluate(() => navigator.clipboard.readText());
+    expect(copiedUrl).toBe(`${new URL(a.page.url()).origin}/${tableUri}`);
 
     // B joins via the URI
     await b.page.getByTestId("join-uri").fill(tableUri);

@@ -386,11 +386,16 @@
 
   async function copyTableUri() {
     try {
-      await navigator.clipboard.writeText(tableUri);
+      // The full shareable URL — paste it straight into a browser.
+      await navigator.clipboard.writeText(`${window.location.origin}/${tableUri}`);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {}
   }
+
+  // A tid is meaningless without its repo — label the table as host/tid.
+  const tableHostDid = $derived(tableUri ? tableUri.split("/")[2] : "");
+  const tableTid = $derived(tableUri ? tableUri.split("/").pop() : "…");
 
   function leave() {
     onLeaveRoom();
@@ -444,7 +449,7 @@
       title="Click to copy table URI"
       data-testid="copy-table-uri"
     >
-      table: <code>{tableUri ? tableUri.split("/").pop() : "…"}</code>
+      table: <code>{nameFor(tableHostDid)}/{tableTid}</code>
       <span class="copy-hint">{copied ? "✓ copied" : "copy"}</span>
     </button>
     <span class="phase-label" data-testid="phase">{gamePhase}</span>
