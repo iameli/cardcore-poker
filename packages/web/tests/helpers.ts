@@ -4,12 +4,6 @@ export type Ctx = { ctx: Awaited<ReturnType<Browser["newContext"]>>; page: Page 
 
 export async function freshContext(browser: Browser): Promise<Ctx> {
   const ctx = await browser.newContext();
-  // Pre-unlock the soft-launch gate so each context skips the password screen.
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
   const page = await ctx.newPage();
   return { ctx, page };
 }
