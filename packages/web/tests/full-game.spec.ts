@@ -103,7 +103,8 @@ test.describe("full game (PDS-only)", () => {
     // and the game ended with one winner (proves the win condition).
     expect(firstHandLogged, "first hand result should be logged").toBe(true);
     expect(sawGameOver, "game should end with one winner").toBe(true);
-    await expect(a.page.getByText(/wins/i).first()).toBeVisible();
+    // The banner declares the winner BY NAME (handle), not just "winner takes all".
+    await expect(a.page.getByTestId("game-over")).toHaveText(/demo-.+ wins it all/);
 
     await a.ctx.close();
     await b.ctx.close();

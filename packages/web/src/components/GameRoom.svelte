@@ -37,6 +37,7 @@
   let isOurTurn = $state(false);
   let copied = $state(false);
   let gameOver = $state(false);
+  let winnerDid = $state(null);
   let isSpectator = $state(false);
   // Portrait-mode game log sheet (slides up from the bottom).
   let logOpen = $state(false);
@@ -283,7 +284,7 @@
     if (_session.gameOver) {
       if (!gameOver) {
         gameOver = true;
-        const winnerDid = playerDids.find((d) => (chipsByDid[d] ?? 0) > 0);
+        winnerDid = playerDids.find((d) => (chipsByDid[d] ?? 0) > 0) ?? null;
         addLog(`🏆 Game over — ${nameFor(winnerDid)} wins!`);
       }
       return;
@@ -461,7 +462,9 @@
   {/if}
 
   {#if gameOver}
-    <div class="gameover-banner" data-testid="game-over">🏆 Game over — winner takes all</div>
+    <div class="gameover-banner" data-testid="game-over">
+      🏆 Game over — {winnerDid ? `${nameFor(winnerDid)} wins it all!` : "winner takes all"}
+    </div>
   {/if}
 
   <div class="main-area">
