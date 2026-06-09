@@ -163,7 +163,7 @@
 
 <style>
   :global(html) {
-    font-size: 20.8px;
+    font-size: 28px;
   }
   :global(*) {
     margin: 0;

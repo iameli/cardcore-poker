@@ -325,7 +325,7 @@
     color: #1a1a1a;
   }
   .did {
-    font-size: 0.32rem;
+    font-size: 0.4rem;
     color: #1a1a1a;
     opacity: 0.5;
   }
@@ -374,7 +374,7 @@
     background: #f5f5f5;
     border: 2px solid #1a1a1a;
     font-family: monospace;
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #1a1a1a;
     word-break: break-all;
     overflow-wrap: break-word;
@@ -400,7 +400,7 @@
     color: #1a1a1a;
   }
   .tag {
-    font-size: 0.32rem;
+    font-size: 0.4rem;
     letter-spacing: 1px;
     opacity: 0.6;
     text-transform: uppercase;

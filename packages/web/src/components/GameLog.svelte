@@ -44,7 +44,7 @@
     gap: 2px;
   }
   .log-entry {
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #1a1a1a;
     padding: 2px 4px;
     border-radius: 0;
@@ -53,7 +53,7 @@
     opacity: 0.4;
   }
   .empty {
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #1a1a1a;
     opacity: 0.4;
     text-align: center;

@@ -128,7 +128,7 @@
     border: 2px solid #1a1a1a;
     border-radius: 0;
     font-family: inherit;
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     cursor: pointer;
     background: #ffffff;
     color: #1a1a1a;
@@ -145,7 +145,7 @@
     color: #ffffff;
   }
   .quick-val {
-    font-size: 0.3rem;
+    font-size: 0.4rem;
     opacity: 0.7;
   }
   .slider-row {

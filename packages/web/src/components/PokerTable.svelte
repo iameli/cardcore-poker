@@ -269,7 +269,7 @@
     border-radius: 0;
   }
   .pot-label {
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #c0392b;
     letter-spacing: 2px;
   }

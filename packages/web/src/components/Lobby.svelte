@@ -192,7 +192,7 @@
     color: #1a1a1a;
   }
   .did {
-    font-size: 0.32rem;
+    font-size: 0.4rem;
     color: #1a1a1a;
     opacity: 0.5;
   }

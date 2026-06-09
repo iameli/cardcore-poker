@@ -177,16 +177,16 @@
     white-space: nowrap;
   }
   .chips {
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #1a1a1a;
     opacity: 0.6;
   }
   .bet {
-    font-size: 0.35rem;
+    font-size: 0.42rem;
     color: #c0392b;
   }
   .folded-badge {
-    font-size: 0.3rem;
+    font-size: 0.4rem;
     color: #c0392b;
     margin-top: 2px;
     letter-spacing: 2px;

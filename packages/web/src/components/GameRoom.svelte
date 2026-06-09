@@ -507,7 +507,7 @@
     letter-spacing: 1px;
   }
   .copy-hint {
-    font-size: 0.32rem;
+    font-size: 0.4rem;
     opacity: 0.6;
     letter-spacing: 1px;
   }
