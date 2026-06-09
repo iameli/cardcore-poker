@@ -10,7 +10,7 @@
   import { FirehoseSubscriber } from "../lib/firehose.js";
   import { LEXICONS } from "../lib/atproto-publisher.js";
   import { GAME_PHASES } from "../lib/poker-engine.js";
-  import { pdsForDid } from "../lib/atproto.js";
+  import { pdsForDid, resolveHandles } from "../lib/atproto.js";
 
   let { session, tableUri, onLeaveRoom } = $props();
 
@@ -19,6 +19,7 @@
   let error = $state("");
   let tableRecord = $state(null);
   let playerDids = $state([]);
+  let handleByDid = $state({});
   let ourPlayerIndex = $state(-1);
   let phase = $state("Init");
   let pot = $state(0);
@@ -82,6 +83,13 @@
       const chips = {};
       for (const did of playerDids) chips[did] = record.startingChips;
       chipsByDid = chips;
+
+      // Resolve handles in the background — DIDs are only the fallback.
+      resolveHandles(playerDids, session.pdsUri)
+        .then((m) => {
+          handleByDid = Object.fromEntries(m);
+        })
+        .catch(() => {});
 
       const seed = restoreOrCreateSeed(tableUri);
       _publisher = new Publisher({ client: session.client, did: session.did });
@@ -241,7 +249,7 @@
       if (!gameOver) {
         gameOver = true;
         const winnerDid = playerDids.find((d) => (chipsByDid[d] ?? 0) > 0);
-        addLog(`🏆 Game over — ${shortDid(winnerDid)} wins!`);
+        addLog(`🏆 Game over — ${nameFor(winnerDid)} wins!`);
       }
       return;
     }
@@ -256,11 +264,11 @@
     addLog(`— Hand ${result.hand_index + 1} results —`);
     if (!result.by_fold) {
       for (const s of result.shown || []) {
-        addLog(`  ${shortDid(playerDids[s.seat])}: ${s.cards.join(" ")} — ${s.hand_desc}`);
+        addLog(`  ${nameFor(playerDids[s.seat])}: ${s.cards.join(" ")} — ${s.hand_desc}`);
       }
     }
     for (const pot of result.pots || []) {
-      const names = pot.winners.map((w) => shortDid(playerDids[w])).join(", ");
+      const names = pot.winners.map((w) => nameFor(playerDids[w])).join(", ");
       if (!names) continue;
       if (result.by_fold) {
         addLog(`  ${names} wins ${pot.amount} (all others folded)`);
@@ -313,6 +321,11 @@
     return did?.slice(0, 12) + "…" + did?.slice(-6);
   }
 
+  /** Display name for a player: handle when resolved, short DID as fallback. */
+  function nameFor(did) {
+    return handleByDid[did] || shortDid(did);
+  }
+
   // ─── User actions ─────────────────────────────────────────────────
 
   async function handleAction(action) {
@@ -347,7 +360,7 @@
       const did = playerDids[i];
       m[did] = {
         id: did,
-        name: shortDid(did),
+        name: nameFor(did),
         did,
         chips: chipsByDid[did] ?? 0,
         bet: betsByDid[did] ?? 0,
@@ -413,7 +426,7 @@
             players={playerMap}
             playerOrder={playerDids}
             playerDids={playerDidsMap}
-            handleMap={{}}
+            handleMap={handleByDid}
             holeCards={decryptedHoleCards}
             {communityCards}
             {pot}
@@ -432,7 +445,7 @@
             {isOurTurn}
           />
           {#if !isOurTurn && actionOnDid && actionOnDid !== session?.did}
-            <div class="waiting-turn">Waiting for {shortDid(actionOnDid)} to act…</div>
+            <div class="waiting-turn">Waiting for {nameFor(actionOnDid)} to act…</div>
           {/if}
           <GameLog events={logEvents} />
         </div>

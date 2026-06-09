@@ -172,16 +172,31 @@ export async function signIn(handle) {
 }
 
 /**
- * Resolve a DID (or handle) to a handle via the configured identity resolver
- * (Slingshot by default — see VITE_SLINGSHOT_URL). Best-effort: returns ""
- * on any failure, including when the resolver is unset (dev).
+ * Resolve a DID (or handle) to a handle. Tries the configured identity
+ * resolver (Slingshot by default — see VITE_SLINGSHOT_URL) first, then falls
+ * back to asking the DID's own PDS via describeRepo — which is what makes
+ * this work in dev, where no resolver is configured and demo accounts live
+ * on the local PDS. Best-effort: returns "" on any failure.
  */
-export async function resolveDidToHandle(did) {
+export async function resolveDidToHandle(did, ownPdsUri) {
   const base = import.meta.env.VITE_SLINGSHOT_URL;
-  if (!base) return ""; // no resolver configured (dev — local PDS doesn't expose this)
+  if (base) {
+    try {
+      const res = await fetch(
+        `${base}/xrpc/blue.microcosm.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.handle) return data.handle;
+      }
+    } catch {
+      // fall through to the PDS
+    }
+  }
   try {
+    const pds = await pdsForDid(did, ownPdsUri);
     const res = await fetch(
-      `${base}/xrpc/blue.microcosm.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
+      `${pds}/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(did)}`,
     );
     if (res.ok) {
       const data = await res.json();
@@ -218,12 +233,12 @@ export async function fetchProfile(did) {
 /**
  * Batch resolve DIDs to handles. Returns a Map of did → handle.
  */
-export async function resolveHandles(dids) {
+export async function resolveHandles(dids, ownPdsUri) {
   const unique = [...new Set(dids.filter(Boolean))];
   const results = new Map();
   await Promise.all(
     unique.map(async (did) => {
-      const handle = await resolveDidToHandle(did);
+      const handle = await resolveDidToHandle(did, ownPdsUri);
       if (handle) results.set(did, handle);
     }),
   );

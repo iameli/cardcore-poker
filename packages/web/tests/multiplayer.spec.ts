@@ -92,6 +92,9 @@ test.describe("multiplayer (PDS-only)", () => {
     const actingPage = acted === "A" ? a.page : b.page;
     await expect(actingPage.getByRole("button", { name: /^RAISE$/ })).toBeVisible();
 
+    // DIDs should only be a fallback — A's table shows B by handle.
+    await expect(a.page.getByText(handleB).first()).toBeVisible({ timeout: 15_000 });
+
     // Fold and verify the hand reaches Showdown/Complete on both sides
     await actingPage.getByRole("button", { name: /^FOLD$/ }).click();
     for (const page of [a.page, b.page]) {

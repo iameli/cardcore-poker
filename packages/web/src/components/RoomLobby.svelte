@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { Publisher } from "../lib/transport.js";
   import { JoinRequestWatcher } from "../lib/discovery.js";
-  import { pdsForDid } from "../lib/atproto.js";
+  import { pdsForDid, resolveDidToHandle } from "../lib/atproto.js";
 
   let { session, uri, onStartGame, onLeaveRoom } = $props();
 
@@ -30,8 +30,25 @@
   let _watcher = null;
   let _poll = null;
 
+  let handleByDid = $state({});
+
   function shortDid(did) {
     return did ? did.slice(0, 10) + "…" + did.slice(-4) : "";
+  }
+
+  /** Display name for a player: handle when resolved, short DID as fallback. */
+  function nameFor(did) {
+    return handleByDid[did] || shortDid(did);
+  }
+
+  /** Resolve a DID's handle in the background and cache it for display. */
+  function learnHandle(did) {
+    if (!did || handleByDid[did]) return;
+    resolveDidToHandle(did, session?.pdsUri)
+      .then((handle) => {
+        if (handle) handleByDid = { ...handleByDid, [did]: handle };
+      })
+      .catch(() => {});
   }
 
   async function fetchTableRecord(u) {
@@ -53,6 +70,8 @@
   onMount(async () => {
     if (!session?.client || !uri) return;
     _publisher = new Publisher({ client: session.client, did: session.did });
+    learnHandle(repo);
+    learnHandle(session.did);
 
     try {
       const { record } = await fetchTableRecord(uri);
@@ -77,6 +96,7 @@
           if (joinerDid === session.did) return;
           if (approved.includes(joinerDid)) return;
           if (pending.some((p) => p.joinerDid === joinerDid)) return;
+          learnHandle(joinerDid);
           pending = [...pending, { joinerDid }];
         },
       });
@@ -206,7 +226,7 @@
           <ul class="request-list">
             {#each pending as req (req.joinerDid)}
               <li class="request-row">
-                <span class="req-did" title={req.joinerDid}>{shortDid(req.joinerDid)}</span>
+                <span class="req-did" title={req.joinerDid}>{nameFor(req.joinerDid)}</span>
                 <button
                   class="btn primary small"
                   onclick={() => approve(req.joinerDid)}
@@ -224,12 +244,12 @@
         <h3>Roster ({rosterCount})</h3>
         <ul class="roster-list" data-testid="roster">
           <li class="roster-row">
-            <span class="req-did">{shortDid(session?.did)}</span>
+            <span class="req-did">{session?.handle || nameFor(session?.did)}</span>
             <span class="tag">host</span>
           </li>
           {#each approved as did (did)}
             <li class="roster-row">
-              <span class="req-did" title={did}>{shortDid(did)}</span>
+              <span class="req-did" title={did}>{nameFor(did)}</span>
               <span class="tag ok">approved</span>
             </li>
           {/each}
@@ -251,7 +271,7 @@
 
       <section class="card">
         <h3>Table</h3>
-        <p class="hint">Hosted by {shortDid(repo)}</p>
+        <p class="hint">Hosted by {nameFor(repo)}</p>
         {#if tableInfo}
           <p class="hint">
             {tableInfo.startingChips} chips · {tableInfo.smallBlind} small blind
