@@ -33,6 +33,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The test image is ~10.5GB and exists TWICE during the build step (the
+      # buildx store plus the `load:`ed docker copy), and the test run grows
+      # the container by several more GB compiling the release test binaries.
+      # That blows straight past the ~21GB free on a stock runner — every disk
+      # byte matters here.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/share/swift || true
+          df -h /
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -44,6 +56,14 @@ jobs:
           tags: cardcore-poker-test:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Drop the builder's copy of the image (it's been loaded into docker) so
+      # the test run's overlay growth has room. The gha cache is already
+      # exported — pruning the local store doesn't touch it.
+      - name: Reclaim builder disk
+        run: |
+          docker buildx prune -af
+          df -h /
 
       - name: Run full test suite
         run: docker run --rm cardcore-poker-test:ci
