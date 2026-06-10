@@ -48,8 +48,12 @@ RUN pnpm --filter @cardcore/web exec playwright install --with-deps chromium
 
 COPY . .
 
-# Re-link JS deps for the full tree and pre-fetch Rust deps
-RUN pnpm install --frozen-lockfile && cargo fetch
+# Re-link JS deps for the full tree and pre-fetch Rust deps. The manifests-only
+# install above ran with --ignore-scripts, and pnpm does NOT re-run dependency
+# build scripts on a later install that finds node_modules up to date — so
+# rebuild them explicitly (better-sqlite3's native binding is what the dev PDS
+# boots on; without this the whole Playwright stage dies).
+RUN pnpm install --frozen-lockfile && pnpm rebuild -r && cargo fetch
 
 # Build WASM (both web and node targets)
 RUN wasm-pack build --target web --release \

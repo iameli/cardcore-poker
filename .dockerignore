@@ -1,0 +1,11 @@
+# Keep the build context CLEAN — CI builds from a fresh checkout, and local
+# builds must match it or they mask bugs (a host node_modules copied over the
+# image's hid a missing native-module build for days).
+.git
+target
+node_modules
+**/node_modules
+packages/web/dist
+packages/web/test-results
+packages/web/playwright-report
+packages/dev-env/dist
