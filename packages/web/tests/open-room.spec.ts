@@ -25,12 +25,6 @@ async function demoSignIn(page: Page) {
 
 async function freshContext(browser: Browser) {
   const ctx = await browser.newContext();
-  // Pre-unlock the soft-launch gate so each context skips the password screen.
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("cardcore_unlocked", "1");
-    } catch {}
-  });
   const page = await ctx.newPage();
   return { ctx, page };
 }
