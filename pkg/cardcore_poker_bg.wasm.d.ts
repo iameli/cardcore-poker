@@ -16,6 +16,7 @@ export const wasmagent_next_hand: (a: number) => [number, number, number];
 export const wasmagent_phase: (a: number) => [number, number];
 export const wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
 export const wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
+export const wasmagent_waiting_on: (a: number) => [number, number];
 export const wasmoutput_action: (a: number, b: number) => [number, number];
 export const wasmoutput_action_count: (a: number) => number;
 export const wasmoutput_bet_options: (a: number) => [number, number];

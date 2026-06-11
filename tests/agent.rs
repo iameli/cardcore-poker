@@ -421,3 +421,37 @@ fn game_continues_without_busted_player() {
         assert_eq!(agents[i].hole_cards().len(), 2);
     }
 }
+
+#[test]
+fn waiting_on_names_the_pending_step_and_seats() {
+    let alice_did = "did:plc:alice";
+    let bob_did = "did:plc:bob";
+
+    let mut alice = PlayerAgent::new(alice_did, b"alice_seed").unwrap();
+    let mut bob = PlayerAgent::new(bob_did, b"bob_seed").unwrap();
+
+    let table_cbor = make_table_cbor(&[alice_did, bob_did], 1000, 10);
+
+    // Both receive the table and commit their own seeds. From bob's view the
+    // protocol is now blocked on alice's commitSeed (his own is already in).
+    let alice_commit = unwrap_actions(alice.receive_table(&table_cbor).unwrap());
+    let bob_commit = unwrap_actions(bob.receive_table(&table_cbor).unwrap());
+    assert_eq!(alice_commit.len(), 1);
+    assert_eq!(bob_commit.len(), 1);
+
+    let waiting: serde_json::Value = serde_json::from_str(&bob.waiting_on_json()).unwrap();
+    assert_eq!(waiting.as_array().unwrap().len(), 1);
+    assert_eq!(waiting[0]["kind"], "commitSeed");
+    assert_eq!(waiting[0]["seats"], serde_json::json!([0]));
+
+    // Alice's commit arrives: all seeds are in, and seat 0 (alice) owes the
+    // first shuffle. This is the exact "everyone committed but nobody
+    // shuffled" stall — bob's window should say
+    // "waiting on shuffleDeck from alice".
+    let _ = bob.receive_action(&alice_commit[0]).unwrap();
+
+    let waiting: serde_json::Value = serde_json::from_str(&bob.waiting_on_json()).unwrap();
+    assert_eq!(waiting.as_array().unwrap().len(), 1);
+    assert_eq!(waiting[0]["kind"], "shuffleDeck");
+    assert_eq!(waiting[0]["seats"], serde_json::json!([0]));
+}

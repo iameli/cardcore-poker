@@ -136,6 +136,13 @@ impl WasmAgent {
         self.inner.game_state_json()
     }
 
+    /// JSON list of pending protocol steps and the seats that owe them:
+    /// `[{"kind":"shuffleDeck","seats":[1]}, ...]` (revealLockKey entries also
+    /// carry a deckPosition). Empty array when nothing is pending.
+    pub fn waiting_on(&self) -> String {
+        self.inner.waiting_on_json()
+    }
+
     /// Check if we need a bet decision.
     pub fn check_status(&mut self) -> Result<WasmOutput, JsValue> {
         self.inner

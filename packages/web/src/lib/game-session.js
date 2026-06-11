@@ -217,6 +217,20 @@ export class PlayerSession {
     return this._pending.length;
   }
 
+  /**
+   * Pending protocol steps and the seats that owe them, straight from the
+   * agent's state machine: [{kind, seats, deckPosition?}]. This is the
+   * stall-debugging view — every client can display exactly whose action it's
+   * blocked on, so two windows that disagree localize a missed record.
+   */
+  get waitingOn() {
+    try {
+      return JSON.parse(this.agent.waiting_on());
+    } catch {
+      return [];
+    }
+  }
+
   /** Result of the most recently completed hand, or null. */
   get lastHandResult() {
     try {

@@ -35,6 +35,11 @@
   let availableActions = $state([]);
   let raiseContext = $state(null);
   let isOurTurn = $state(false);
+  // Pending protocol steps from the agent's state machine: [{kind, seats,
+  // deckPosition?}]. Shown at all times so a stalled game says exactly whose
+  // action it's waiting for — comparing this line across windows is how we
+  // debug "everyone committed but nobody shuffled".
+  let waitingOn = $state([]);
   let copied = $state(false);
   let gameOver = $state(false);
   let winnerDid = $state(null);
@@ -234,6 +239,7 @@
     holeCards = _session.holeCards;
     communityCards = _session.communityCards;
     phase = _session.phase;
+    waitingOn = _session.waitingOn;
 
     const commLen = communityCards.length;
     let uiPhase = "preflop";
@@ -369,6 +375,30 @@
     return handleByDid[did] || shortDid(did);
   }
 
+  // "waiting on shuffleDeck from example.com" — always-on status built from
+  // the agent's own valid_actions, covering the noninteractive steps as well
+  // as bets. "you" in this line means OUR agent owes the step and hasn't
+  // emitted it: that window is the stuck one.
+  const waitingMsg = $derived.by(() => {
+    // verifySeed is deliberately never auto-emitted in a multi-hand game (it
+    // would reveal the hand's deal), so a Complete phase only means the next
+    // hand is coming — don't report it as waiting on anyone.
+    const entries = waitingOn.filter((e) => e.kind !== "verifySeed");
+    if (!entries.length) {
+      if (!gameOver && phase === "Complete") return "hand complete — next hand soon…";
+      return "";
+    }
+    return entries
+      .map((e) => {
+        const step = e.kind === "revealLockKey" ? `revealLockKey #${e.deckPosition}` : e.kind;
+        const who = (e.seats || [])
+          .map((s) => (playerDids[s] === session?.did ? "you" : nameFor(playerDids[s])))
+          .join(", ");
+        return `waiting on ${step} from ${who}`;
+      })
+      .join("; ");
+  });
+
   // ─── User actions ─────────────────────────────────────────────────
 
   async function handleAction(action) {
@@ -498,7 +528,7 @@
           <div class="bottom-panel">
             {#if isSpectator}
               <div class="spectating" data-testid="spectating">
-                👁 Spectating{actionOnDid ? ` — ${nameFor(actionOnDid)} to act` : ""}
+                👁 Spectating{waitingMsg ? ` — ${waitingMsg}` : ""}
               </div>
             {:else}
               <ActionBar
@@ -506,9 +536,7 @@
                 raise={raiseContext}
                 onAction={handleAction}
                 {isOurTurn}
-                placeholder={!isOurTurn && actionOnDid && actionOnDid !== session?.did
-                  ? `Waiting for ${nameFor(actionOnDid)} to act…`
-                  : ""}
+                placeholder={waitingMsg}
               />
             {/if}
           </div>

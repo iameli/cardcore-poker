@@ -183,6 +183,24 @@ export class WasmAgent {
         }
         return WasmOutput.__wrap(ret[0]);
     }
+    /**
+     * JSON list of pending protocol steps and the seats that owe them:
+     * `[{"kind":"shuffleDeck","seats":[1]}, ...]` (revealLockKey entries also
+     * carry a deckPosition). Empty array when nothing is pending.
+     * @returns {string}
+     */
+    waiting_on() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmagent_waiting_on(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
 }
 if (Symbol.dispose) WasmAgent.prototype[Symbol.dispose] = WasmAgent.prototype.free;
 

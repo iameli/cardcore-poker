@@ -220,6 +220,44 @@ impl PlayerAgent {
         &self.state.phase
     }
 
+    /// JSON summary of which protocol step(s) the game is blocked on and which
+    /// seats owe them: `[{"kind":"shuffleDeck","seats":[1]}, ...]`. Kinds use
+    /// the lexicon's camelCase names so they match the action log. This is the
+    /// debugging view for stalls — every window can show "waiting on
+    /// shuffleDeck from X" and a disagreement between windows localizes the
+    /// missed or rejected action.
+    pub fn waiting_on_json(&self) -> String {
+        use std::collections::BTreeMap;
+        // Group seats by (kind, deck position) — e.g. all the players who
+        // still owe a RevealLockKey for the card being dealt.
+        let mut groups: BTreeMap<(&'static str, Option<usize>), Vec<usize>> = BTreeMap::new();
+        for va in self.state.valid_actions() {
+            let (kind, pos) = match &va.kind {
+                ValidActionKind::CommitSeed => ("commitSeed", None),
+                ValidActionKind::ShuffleDeck => ("shuffleDeck", None),
+                ValidActionKind::LockDeck => ("lockDeck", None),
+                ValidActionKind::RevealLockKey { deck_position } => {
+                    ("revealLockKey", Some(*deck_position))
+                }
+                ValidActionKind::Bet { .. } => ("bet", None),
+                ValidActionKind::RevealHand => ("revealHand", None),
+                ValidActionKind::VerifySeed => ("verifySeed", None),
+            };
+            groups.entry((kind, pos)).or_default().push(va.player_id);
+        }
+        let entries: Vec<serde_json::Value> = groups
+            .into_iter()
+            .map(|((kind, pos), seats)| {
+                let mut v = serde_json::json!({ "kind": kind, "seats": seats });
+                if let Some(p) = pos {
+                    v["deckPosition"] = p.into();
+                }
+                v
+            })
+            .collect();
+        serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into())
+    }
+
     /// Get game state as JSON for the frontend.
     pub fn game_state_json(&self) -> String {
         let state = &self.state.game;

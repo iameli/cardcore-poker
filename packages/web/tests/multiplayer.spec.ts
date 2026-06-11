@@ -64,6 +64,15 @@ test.describe("multiplayer (PDS-only)", () => {
     const actingPage = acted === "A" ? a.page : b.page;
     await expect(actingPage.getByRole("button", { name: /^RAISE$/ })).toBeVisible();
 
+    // The waiting player's bar names the exact protocol step and who owes it
+    // — the always-on stall-debugging line.
+    const waitingPage = acted === "A" ? b.page : a.page;
+    const actingHandle = acted === "A" ? handleA : handleB;
+    await expect(waitingPage.getByTestId("waiting-on")).toContainText(
+      `waiting on bet from ${actingHandle}`,
+      { timeout: 15_000 },
+    );
+
     // The layout holds still across turn changes: the acting player's bar
     // (buttons) and the waiting player's bar (placeholder text) are the same
     // height, so the scaled game doesn't jump.

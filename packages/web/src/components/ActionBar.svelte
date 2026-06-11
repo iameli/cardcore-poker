@@ -46,7 +46,7 @@
   {:else}
     <!-- A de-chromed disabled button: its metrics match the real buttons
          exactly, so the bar height never changes. -->
-    <button class="action-btn placeholder" disabled tabindex="-1">
+    <button class="action-btn placeholder" disabled tabindex="-1" data-testid="waiting-on">
       {placeholder || "\u00a0"}
     </button>
   {/if}

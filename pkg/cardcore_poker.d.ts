@@ -54,6 +54,12 @@ export class WasmAgent {
      * Feed a DAG-CBOR table record. Returns actions to emit.
      */
     receive_table(cbor: Uint8Array): WasmOutput;
+    /**
+     * JSON list of pending protocol steps and the seats that owe them:
+     * `[{"kind":"shuffleDeck","seats":[1]}, ...]` (revealLockKey entries also
+     * carry a deckPosition). Empty array when nothing is pending.
+     */
+    waiting_on(): string;
 }
 
 /**
@@ -102,6 +108,7 @@ export interface InitOutput {
     readonly wasmagent_phase: (a: number) => [number, number];
     readonly wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmagent_waiting_on: (a: number) => [number, number];
     readonly wasmoutput_action: (a: number, b: number) => [number, number];
     readonly wasmoutput_action_count: (a: number) => number;
     readonly wasmoutput_bet_options: (a: number) => [number, number];
