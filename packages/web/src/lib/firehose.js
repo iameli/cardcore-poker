@@ -15,10 +15,18 @@
  *     client-side. Wasteful on the public network; fine for the local dev
  *     PDS since it only knows our demo accounts.
  *
- * On startup we also do a one-shot listRecords backfill (always against each
- * peer's authoritative PDS) to catch anything published before we
- * subscribed. Events are deduplicated by (did, seq) so backfill + live can
- * race safely.
+ * Ordering matters: the live socket is opened FIRST, and a listRecords
+ * backfill (always against each peer's authoritative PDS) runs once it's
+ * connected. The reverse order has a delivery gap — a record published after
+ * the backfill snapshot but before the subscription went live is never
+ * delivered, and game start sits squarely in it (every peer publishes
+ * commitSeed within seconds of the table record). Events are deduplicated by
+ * (did, seq) so backfill + live can race safely.
+ *
+ * Frames can also be lost mid-game without the socket closing (flaky
+ * connections, relay hiccups) — and the firehose never redelivers. As a
+ * safety net, whenever the stream has been quiet for a while we re-sweep the
+ * PDSes; a sweep that finds nothing new is cheap and side-effect-free.
  */
 import { decodeMultiple } from "cbor-x";
 import { CarReader } from "@ipld/car";
@@ -27,6 +35,16 @@ import { pdsForDid } from "./atproto.js";
 import { LEXICONS } from "./atproto-publisher.js";
 
 const ACTION_PATH_PREFIX = `${LEXICONS.ACTION}/`;
+
+// Re-sweep the PDSes when no action has arrived for this long. A dropped
+// frame would otherwise stall the protocol forever — the firehose never
+// redelivers. Idle sweeps during a long betting think are small listRecords
+// reads, an acceptable price for unsticking a game within ~10s.
+const QUIET_RESWEEP_MS = 8_000;
+const RESWEEP_POLL_MS = 4_000;
+// How long start() waits for the live socket before backfilling anyway — a
+// relay that can't connect must degrade to polling, not block startup.
+const SOCKET_OPEN_TIMEOUT_MS = 3_000;
 
 function decodeFrame(bytes) {
   const values = [];
@@ -81,6 +99,10 @@ export class FirehoseSubscriber {
     this.reconnectDelays = new Map(); // socket key → ms
     this.cursorBySocket = new Map(); // socket key → last firehose seq seen
     this.pdsByDid = new Map(); // did → pdsUri (always populated for backfill)
+    this._lastEventAt = 0; // when the last NEW action was dispatched
+    this._lastSweepAt = 0; // when the last backfill sweep started
+    this._sweeping = false;
+    this._pollTimer = null;
   }
 
   async start() {
@@ -97,20 +119,23 @@ export class FirehoseSubscriber {
       }),
     );
 
-    // Backfill from each peer's PDS via listRecords. Live events from before
-    // we subscribed would otherwise be missed.
-    await Promise.all(this.peerDids.map((did) => this._backfill(did)));
-
+    // Open the live subscription FIRST; backfill only once it's connected.
+    // Anything published before the socket went live is on the PDS for the
+    // backfill to find, anything after flows down the wire, and the overlap
+    // dedups by (did, seq) — no gap.
+    const opens = [];
     const filteredFirehose = import.meta.env.VITE_FIREHOSE_URL;
     if (filteredFirehose) {
       // Single connection to the filtered firehose service.
       const dids = new Set(this.peerDids);
-      this._openSocket({
-        key: "filtered",
-        wsBase: originToWs(filteredFirehose),
-        dids,
-        wantedDids: this.peerDids,
-      });
+      opens.push(
+        this._openSocket({
+          key: "filtered",
+          wsBase: originToWs(filteredFirehose),
+          dids,
+          wantedDids: this.peerDids,
+        }),
+      );
     } else {
       // Fallback: one socket per unique PDS.
       const byPds = new Map(); // pdsUri → did[]
@@ -119,17 +144,48 @@ export class FirehoseSubscriber {
         byPds.get(pds).push(did);
       }
       for (const [pds, dids] of byPds) {
-        this._openSocket({
-          key: pds,
-          wsBase: originToWs(pds),
-          dids: new Set(dids),
-        });
+        opens.push(
+          this._openSocket({
+            key: pds,
+            wsBase: originToWs(pds),
+            dids: new Set(dids),
+          }),
+        );
       }
+    }
+    await Promise.race([
+      Promise.all(opens),
+      new Promise((resolve) => setTimeout(resolve, SOCKET_OPEN_TIMEOUT_MS)),
+    ]);
+
+    await this.backfillAll();
+
+    // Quiet-period safety net: if no action has arrived for a while, sweep
+    // the PDSes for anything a lost frame would otherwise have buried.
+    this._pollTimer = setInterval(() => {
+      const idleSince = Math.max(this._lastEventAt, this._lastSweepAt);
+      if (Date.now() - idleSince >= QUIET_RESWEEP_MS) this.backfillAll();
+    }, RESWEEP_POLL_MS);
+  }
+
+  /** Sweep every peer's PDS for action records. Safe to call repeatedly. */
+  async backfillAll() {
+    if (this._sweeping || this.stopped) return;
+    this._sweeping = true;
+    this._lastSweepAt = Date.now();
+    try {
+      await Promise.all(this.peerDids.map((did) => this._backfill(did)));
+    } finally {
+      this._sweeping = false;
     }
   }
 
   stop() {
     this.stopped = true;
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
     for (const { ws } of this.sockets) {
       try {
         ws.close();
@@ -170,8 +226,13 @@ export class FirehoseSubscriber {
     }
   }
 
+  /**
+   * Open one subscribeRepos socket. Resolves once the connection is open (or
+   * has failed and entered the reconnect loop) — start() backfills only after
+   * this, so nothing can slip between snapshot and subscription.
+   */
   _openSocket({ key, wsBase, dids, wantedDids }) {
-    if (this.stopped) return;
+    if (this.stopped) return Promise.resolve();
     const params = new URLSearchParams();
     if (wantedDids) {
       for (const did of wantedDids) params.append("wantedDids", did);
@@ -186,8 +247,14 @@ export class FirehoseSubscriber {
     const slot = { ws, key, dids, wantedDids };
     this.sockets.push(slot);
 
+    let resolveSettled;
+    const settled = new Promise((resolve) => {
+      resolveSettled = resolve;
+    });
+
     ws.addEventListener("open", () => {
       this.reconnectDelays.set(key, 0);
+      resolveSettled();
     });
 
     ws.addEventListener("message", async (ev) => {
@@ -219,6 +286,7 @@ export class FirehoseSubscriber {
     });
 
     ws.addEventListener("close", () => {
+      resolveSettled();
       if (this.stopped) return;
       // Exponential backoff: 1s, 2s, 4s, ... capped at 30s.
       const prev = this.reconnectDelays.get(key) ?? 0;
@@ -231,12 +299,16 @@ export class FirehoseSubscriber {
     ws.addEventListener("error", () => {
       // close handler will retry.
     });
+
+    return settled;
   }
 
   _dispatch(did, seq, makeCbor) {
+    if (this.stopped) return;
     const dedupKey = `${did}:${seq}`;
     if (this.seen.has(dedupKey)) return;
     this.seen.add(dedupKey);
+    this._lastEventAt = Date.now();
     try {
       const cbor = makeCbor();
       this.onAction(did, seq, cbor);
