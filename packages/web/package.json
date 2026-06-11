@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "PLAYWRIGHT_HEADED=1 playwright test"
   },
   "dependencies": {
     "@atcute/client": "^4.2.1",

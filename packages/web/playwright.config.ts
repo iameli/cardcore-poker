@@ -14,10 +14,11 @@ function resolveChromium(): string | undefined {
 }
 
 const SYSTEM_CHROMIUM = resolveChromium();
-// Default to headed locally (so you can watch); headless in CI / Docker /
-// any environment without an X display.
-const HEADLESS =
-  process.env.CI === "true" || process.env.PLAYWRIGHT_HEADLESS === "true" || !process.env.DISPLAY;
+// Headless by default — tests run constantly in the background (agents, CI)
+// and shouldn't pop windows. Opt into a visible, slowed-down browser with
+// PLAYWRIGHT_HEADED=1 (or `pnpm test:headed`). Needs an X display.
+const HEADED = ["1", "true"].includes(process.env.PLAYWRIGHT_HEADED ?? "") && !!process.env.DISPLAY;
+const HEADLESS = !HEADED;
 
 export default defineConfig({
   testDir: "./tests",
