@@ -1,0 +1,50 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.blackjack.action",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A single action in a blackjack round. Key format: {table-tid}-{sequence-number}. Each action chains back to the previous via prev.",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "required": ["table", "seq", "action", "createdAt"],
+        "properties": {
+          "table": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Reference to the table record for this game."
+          },
+          "prev": {
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Reference to the previous action in this game. Absent for the first action (seq 0)."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Action sequence number within this game, starting from 0."
+          },
+          "action": {
+            "type": "union",
+            "refs": [
+              "re.cardco.blackjack.defs#commitSeed",
+              "re.cardco.blackjack.defs#shuffleDeck",
+              "re.cardco.blackjack.defs#lockDeck",
+              "re.cardco.blackjack.defs#revealLockKey",
+              "re.cardco.blackjack.defs#wager",
+              "re.cardco.blackjack.defs#insurance",
+              "re.cardco.blackjack.defs#decision",
+              "re.cardco.blackjack.defs#verifySeed"
+            ],
+            "description": "The action payload."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

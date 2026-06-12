@@ -34,8 +34,6 @@ import * as dagCbor from "@ipld/dag-cbor";
 import { pdsForDid } from "./atproto.js";
 import { LEXICONS } from "./atproto-publisher.js";
 
-const ACTION_PATH_PREFIX = `${LEXICONS.ACTION}/`;
-
 // Re-sweep the PDSes when no action has arrived for this long. A dropped
 // frame would otherwise stall the protocol forever — the firehose never
 // redelivers. Idle sweeps during a long betting think are small listRecords
@@ -56,12 +54,12 @@ function decodeFrame(bytes) {
 }
 
 /**
- * Walk every block in the CAR and yield decoded poker.action records.
- * We don't bother matching the op CIDs — there are typically only a handful
- * of blocks per commit and decoding each is cheap. Anything that doesn't
- * decode as a re.cardco.poker.action record is silently skipped.
+ * Walk every block in the CAR and yield decoded action records for the
+ * given collection. We don't bother matching the op CIDs — there are
+ * typically only a handful of blocks per commit and decoding each is cheap.
+ * Anything that doesn't decode as an action record is silently skipped.
  */
-async function* extractActionRecords(carBytes) {
+async function* extractActionRecords(carBytes, actionCollection) {
   const reader = await CarReader.fromBytes(carBytes);
   for await (const block of reader.blocks()) {
     let record;
@@ -70,7 +68,7 @@ async function* extractActionRecords(carBytes) {
     } catch {
       continue;
     }
-    if (record?.$type === LEXICONS.ACTION) yield record;
+    if (record?.$type === actionCollection) yield record;
   }
 }
 
@@ -86,13 +84,16 @@ export class FirehoseSubscriber {
    * @param {string[]} opts.peerDids - peer DIDs to listen for (excludes self)
    * @param {string} opts.tableUri - table AT URI (for filtering action records)
    * @param {string} opts.ownPdsUri - the local user's PDS, used as the dev fallback
+   * @param {string} [opts.actionCollection] - action record collection (defaults to poker)
    * @param {(did: string, seq: number, actionCbor: Uint8Array) => void} opts.onAction
    */
-  constructor({ peerDids, tableUri, ownPdsUri, onAction }) {
+  constructor({ peerDids, tableUri, ownPdsUri, onAction, actionCollection = LEXICONS.ACTION }) {
     this.peerDids = peerDids;
     this.tableUri = tableUri;
     this.ownPdsUri = ownPdsUri;
     this.onAction = onAction;
+    this.actionCollection = actionCollection;
+    this.actionPathPrefix = `${actionCollection}/`;
     this.seen = new Set(); // `${did}:${seq}` keys
     this.sockets = []; // { ws, key, dids: Set }
     this.stopped = false;
@@ -207,7 +208,7 @@ export class FirehoseSubscriber {
         const url =
           `${pds}/xrpc/com.atproto.repo.listRecords` +
           `?repo=${encodeURIComponent(did)}` +
-          `&collection=${encodeURIComponent(LEXICONS.ACTION)}` +
+          `&collection=${encodeURIComponent(this.actionCollection)}` +
           `&limit=100&reverse=true` +
           (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
         const res = await fetch(url);
@@ -272,10 +273,15 @@ export class FirehoseSubscriber {
         if (!frame.blocks) return;
 
         // Skip if no ops touch our action collection.
-        const hasActionOp = (frame.ops || []).some((op) => op.path?.startsWith(ACTION_PATH_PREFIX));
+        const hasActionOp = (frame.ops || []).some((op) =>
+          op.path?.startsWith(this.actionPathPrefix),
+        );
         if (!hasActionOp) return;
 
-        for await (const record of extractActionRecords(new Uint8Array(frame.blocks))) {
+        for await (const record of extractActionRecords(
+          new Uint8Array(frame.blocks),
+          this.actionCollection,
+        )) {
           if (record.table?.uri !== this.tableUri) continue;
           const seq = record.seq;
           this._dispatch(frame.repo, seq, () => this._cborFromRecord(record));

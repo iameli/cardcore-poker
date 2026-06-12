@@ -63,6 +63,101 @@ export class WasmAgent {
 }
 
 /**
+ * Result from the blackjack agent: actions to emit, an interactive need, or
+ * waiting.
+ */
+export class WasmBjOutput {
+    /**
+     * Number of actions to emit.
+     */
+    readonly action_count: number;
+    readonly kind: string;
+    /**
+     * Options as JSON (for "need_wager" and "need_decision" kinds).
+     */
+    readonly options: string;
+
+    private constructor();
+
+    free(): void;
+
+    [Symbol.dispose](): void;
+
+    /**
+     * Get the nth action as CBOR bytes.
+     */
+    action(index: number): Uint8Array;
+}
+
+export class WasmBlackjackAgent {
+    /**
+     * Create a new agent with a DID and secret seed.
+     */
+    constructor(did: string, seed: Uint8Array);
+
+    free(): void;
+
+    [Symbol.dispose](): void;
+
+    /**
+     * Submit a player action. One of: "wager:AMOUNT", "insurance:yes",
+     * "insurance:no", "hit", "stand", "double", "split", "surrender".
+     */
+    act(action: string): WasmBjOutput;
+
+    /**
+     * The banker's face-up cards as JSON array of strings.
+     */
+    banker_cards(): string;
+
+    /**
+     * Check if we need a wager, insurance answer, or decision.
+     */
+    check_status(): WasmBjOutput;
+
+    /**
+     * Whether the whole game is over (at most one player has chips).
+     */
+    game_over(): boolean;
+
+    /**
+     * Get game state as JSON: minBet, banker, bankerCards, actionOn, players.
+     */
+    game_state(): string;
+
+    /**
+     * JSON of the most recently completed round's result, or "" if none yet.
+     */
+    last_round_result(): string;
+
+    /**
+     * This player's hand(s) as JSON (e.g., [["8c","8d"]]; two arrays after a split).
+     */
+    my_hands(): string;
+
+    /**
+     * Advance to the next round (call after the current round is Complete
+     * and the game isn't over). Returns this player's actions for the new
+     * round.
+     */
+    next_round(): WasmBjOutput;
+    /**
+     * Get the current protocol phase.
+     * Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Wagering",
+     * "Dealing", "Insurance", "PlayerTurn", "Complete"
+     */
+    phase(): string;
+    /**
+     * Feed a DAG-CBOR action from any player.
+     */
+    receive_action(cbor: Uint8Array): WasmBjOutput;
+    /**
+     * Feed a DAG-CBOR table record. Returns actions to emit.
+     */
+    receive_table(cbor: Uint8Array): WasmBjOutput;
+}
+
+/**
  * Result from the agent: either actions to emit, a bet decision needed, or waiting.
  */
 export class WasmOutput {
@@ -94,7 +189,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmagent_free: (a: number, b: number) => void;
-    readonly __wbg_wasmoutput_free: (a: number, b: number) => void;
+    readonly __wbg_wasmbjoutput_free: (a: number, b: number) => void;
+    readonly __wbg_wasmblackjackagent_free: (a: number, b: number) => void;
     readonly simulate_game: (a: number, b: bigint, c: bigint, d: number, e: number, f: bigint) => [number, number, number, number];
     readonly wasmagent_bet: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_check_status: (a: number) => [number, number, number];
@@ -109,10 +205,27 @@ export interface InitOutput {
     readonly wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_waiting_on: (a: number) => [number, number];
-    readonly wasmoutput_action: (a: number, b: number) => [number, number];
+    readonly wasmbjoutput_action: (a: number, b: number) => [number, number];
+    readonly wasmbjoutput_action_count: (a: number) => number;
+    readonly wasmbjoutput_kind: (a: number) => [number, number];
+    readonly wasmbjoutput_options: (a: number) => [number, number];
+    readonly wasmblackjackagent_act: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmblackjackagent_banker_cards: (a: number) => [number, number];
+    readonly wasmblackjackagent_check_status: (a: number) => [number, number, number];
+    readonly wasmblackjackagent_game_over: (a: number) => number;
+    readonly wasmblackjackagent_game_state: (a: number) => [number, number];
+    readonly wasmblackjackagent_last_round_result: (a: number) => [number, number];
+    readonly wasmblackjackagent_my_hands: (a: number) => [number, number];
+    readonly wasmblackjackagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmblackjackagent_next_round: (a: number) => [number, number, number];
+    readonly wasmblackjackagent_phase: (a: number) => [number, number];
+    readonly wasmblackjackagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmblackjackagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmoutput_action_count: (a: number) => number;
-    readonly wasmoutput_bet_options: (a: number) => [number, number];
+    readonly __wbg_wasmoutput_free: (a: number, b: number) => void;
     readonly wasmoutput_kind: (a: number) => [number, number];
+    readonly wasmoutput_action: (a: number, b: number) => [number, number];
+    readonly wasmoutput_bet_options: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

@@ -3,10 +3,11 @@
   import { Publisher, fetchTableRecord } from "../lib/transport.js";
   import { JoinRequestWatcher } from "../lib/discovery.js";
   import { resolveDidToHandle } from "../lib/atproto.js";
+  import { DEFAULT_GAME } from "../lib/games.js";
 
-  let { session, uri, onStartGame, onLeaveRoom } = $props();
+  let { session, uri, game = DEFAULT_GAME, onStartGame, onLeaveRoom } = $props();
 
-  // The room URI is at://<host>/re.cardco.poker.table/<tid>. We're the host
+  // The room URI is at://<host>/<game table collection>/<tid>. We're the host
   // iff the repo segment is our own DID.
   const repo = $derived(uri ? uri.split("/")[2] : "");
   const tid = $derived(uri ? uri.split("/").pop() : "");
@@ -15,7 +16,7 @@
 
   let copied = $state(false);
   let error = $state("");
-  let tableInfo = $state(null); // { startingChips, smallBlind, players }
+  let tableInfo = $state(null); // { startingChips, stakes, players }
 
   // host-side state
   let pending = $state([]); // [{ joinerDid }] awaiting approval
@@ -60,7 +61,12 @@
 
   onMount(async () => {
     if (!session?.client || !uri) return;
-    _publisher = new Publisher({ client: session.client, did: session.did });
+    _publisher = new Publisher({
+      client: session.client,
+      did: session.did,
+      tableCollection: game.tableCollection,
+      actionCollection: game.actionCollection,
+    });
     learnHandle(repo);
     learnHandle(session.did);
 
@@ -68,13 +74,17 @@
       const { record } = await fetchTableRecord(uri, session.pdsUri);
       tableInfo = {
         startingChips: record.startingChips,
-        smallBlind: record.smallBlind,
+        stakes: record[game.stakesField],
         players: record.players || [],
       };
     } catch (e) {
       // Brand-new host record may not be readable for a beat; fall back to the
-      // protocol defaults so the host UI still renders.
-      tableInfo = { startingChips: 1000, smallBlind: 10, players: [session.did] };
+      // game's defaults so the host UI still renders.
+      tableInfo = {
+        startingChips: game.defaults.startingChips,
+        stakes: game.defaults.stakes,
+        players: [session.did],
+      };
     }
 
     if (isHost) {
@@ -83,6 +93,7 @@
         hostDid: session.did,
         tableRkey: tid,
         ownPdsUri: session.pdsUri,
+        tableCollection: game.tableCollection,
         onRequest: ({ joinerDid }) => {
           if (joinerDid === session.did) return;
           if (approved.includes(joinerDid)) return;
@@ -126,8 +137,8 @@
       const roster = [session.did, ...approved];
       await _publisher.publishTableWithRkey(tid, {
         players: roster,
-        startingChips: tableInfo?.startingChips ?? 1000,
-        smallBlind: tableInfo?.smallBlind ?? 10,
+        startingChips: tableInfo?.startingChips ?? game.defaults.startingChips,
+        [game.stakesField]: tableInfo?.stakes ?? game.defaults.stakes,
         startedAt: new Date().toISOString(),
       });
       onStartGame();
@@ -150,7 +161,7 @@
       _joinRequest = {
         players: roster,
         startingChips: record.startingChips,
-        smallBlind: record.smallBlind,
+        [game.stakesField]: record[game.stakesField],
       };
       await _publisher.publishTableWithRkey(tid, {
         ..._joinRequest,
@@ -289,10 +300,11 @@
 
       <section class="card">
         <h3>Table</h3>
-        <p class="hint">Hosted by {nameFor(repo)}</p>
+        <p class="hint">{game.label} · hosted by {nameFor(repo)}</p>
         {#if tableInfo}
           <p class="hint">
-            {tableInfo.startingChips} chips · {tableInfo.smallBlind} small blind
+            {tableInfo.startingChips} chips · {tableInfo.stakes}
+            {game.stakesLabel}
           </p>
         {/if}
       </section>

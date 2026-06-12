@@ -3,7 +3,7 @@
   "client_name": "Cardcore Poker",
   "client_uri": "https://cardco.re",
   "redirect_uris": ["https://cardco.re"],
-  "scope": "atproto repo:re.cardco.poker.action repo:re.cardco.poker.table repo:re.cardco.actor.profile",
+  "scope": "atproto repo:re.cardco.poker.action repo:re.cardco.poker.table repo:re.cardco.blackjack.action repo:re.cardco.blackjack.table repo:re.cardco.actor.profile",
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "token_endpoint_auth_method": "none",

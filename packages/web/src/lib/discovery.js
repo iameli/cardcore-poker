@@ -28,8 +28,6 @@ import { CarReader } from "@ipld/car";
 import * as dagCbor from "@ipld/dag-cbor";
 import { LEXICONS } from "./atproto-publisher.js";
 
-const TABLE_PATH_PREFIX = `${LEXICONS.TABLE}/`;
-
 function decodeFrame(bytes) {
   const values = [];
   decodeMultiple(bytes, (v) => values.push(v));
@@ -44,7 +42,7 @@ function originToWs(uri) {
   return uri.replace(/^http/, "ws");
 }
 
-async function* extractTableRecords(carBytes) {
+async function* extractTableRecords(carBytes, tableCollection) {
   const reader = await CarReader.fromBytes(carBytes);
   for await (const block of reader.blocks()) {
     let record;
@@ -53,7 +51,7 @@ async function* extractTableRecords(carBytes) {
     } catch {
       continue;
     }
-    if (record?.$type === LEXICONS.TABLE) yield record;
+    if (record?.$type === tableCollection) yield record;
   }
 }
 
@@ -63,13 +61,16 @@ export class JoinRequestWatcher {
    * @param {string} opts.hostDid - the room host's DID (us)
    * @param {string} opts.tableRkey - rkey of the host's table record
    * @param {string} opts.ownPdsUri - host's PDS endpoint (dev fallback target)
+   * @param {string} [opts.tableCollection] - table record collection (defaults to poker)
    * @param {(req: {joinerDid: string, players: string[], createdAt?: string}) => void} opts.onRequest
    */
-  constructor({ hostDid, tableRkey, ownPdsUri, onRequest }) {
+  constructor({ hostDid, tableRkey, ownPdsUri, onRequest, tableCollection = LEXICONS.TABLE }) {
     this.hostDid = hostDid;
     this.tableRkey = tableRkey;
     this.ownPdsUri = ownPdsUri;
     this.onRequest = onRequest;
+    this.tableCollection = tableCollection;
+    this.tablePathPrefix = `${tableCollection}/`;
     this.seen = new Set(); // joiner DIDs already surfaced
     this.ws = null;
     this.stopped = false;
@@ -82,7 +83,7 @@ export class JoinRequestWatcher {
     // PDS doesn't support the param, and its stream is just our demo accounts).
     const filtered = import.meta.env.VITE_FIREHOSE_URL;
     if (filtered) {
-      this._connect(filtered, `?wantedCollections=${encodeURIComponent(LEXICONS.TABLE)}`);
+      this._connect(filtered, `?wantedCollections=${encodeURIComponent(this.tableCollection)}`);
     } else {
       this._connect(this.ownPdsUri, "");
     }
@@ -141,10 +142,13 @@ export class JoinRequestWatcher {
         if (frame.repo === this.hostDid) return;
         if (!frame.blocks) return;
         const touchesTable = (frame.ops || []).some(
-          (op) => op.path === `${TABLE_PATH_PREFIX}${this.tableRkey}`,
+          (op) => op.path === `${this.tablePathPrefix}${this.tableRkey}`,
         );
         if (!touchesTable) return;
-        for await (const record of extractTableRecords(new Uint8Array(frame.blocks))) {
+        for await (const record of extractTableRecords(
+          new Uint8Array(frame.blocks),
+          this.tableCollection,
+        )) {
           this._emit(frame.repo, record);
         }
       } catch (e) {

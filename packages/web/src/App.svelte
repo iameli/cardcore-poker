@@ -2,7 +2,7 @@
   import SignIn from "./components/SignIn.svelte";
   import Lobby from "./components/Lobby.svelte";
   import RoomLobby from "./components/RoomLobby.svelte";
-  import GameRoom from "./components/GameRoom.svelte";
+  import { DEFAULT_GAME, gameForTableUri } from "./lib/games.js";
   import { handleCallback, getStoredSession, signOut } from "./lib/atproto.js";
   import { restoreDemoSession, clearDemoSession } from "./lib/demo-pds.js";
   import { fetchTableRecord, AUTH_EXPIRED_EVENT } from "./lib/transport.js";
@@ -14,6 +14,10 @@
   let session = $state(null);
   let tableUri = $state(null);
   let roomUri = $state(null);
+  // Which game the active room/table belongs to — resolved from the table
+  // collection in the at:// URI. Decides the room component to mount.
+  let game = $state(DEFAULT_GAME);
+  const Room = $derived(game.roomComponent);
 
   /**
    * Read a room deep link out of the path. We use a path-based form —
@@ -78,6 +82,7 @@
       page = "lobby";
       return;
     }
+    game = gameForTableUri(deep);
     (async () => {
       try {
         const { record } = await fetchTableRecord(deep, s.pdsUri);
@@ -157,6 +162,7 @@
   }
 
   function onCreateRoom(uri) {
+    game = gameForTableUri(uri);
     roomUri = uri;
     page = "roomLobby";
     window.history.pushState({}, "", `/${uri}`);
@@ -174,12 +180,14 @@
 
   function onLeaveRoom() {
     roomUri = null;
+    game = DEFAULT_GAME;
     page = "lobby";
     window.history.replaceState({}, "", "/");
   }
 
   function onLeaveTable() {
     tableUri = null;
+    game = DEFAULT_GAME;
     page = "lobby";
     window.history.replaceState({}, "", "/");
   }
@@ -208,9 +216,9 @@
   {:else if page === "lobby"}
     <Lobby {session} {onCreateRoom} {onSignOut} />
   {:else if page === "roomLobby"}
-    <RoomLobby {session} uri={roomUri} {onStartGame} {onLeaveRoom} />
+    <RoomLobby {session} uri={roomUri} {game} {onStartGame} {onLeaveRoom} />
   {:else if page === "game"}
-    <GameRoom {session} {tableUri} onLeaveRoom={onLeaveTable} />
+    <Room {session} {tableUri} onLeaveRoom={onLeaveTable} />
   {/if}
 </div>
 
