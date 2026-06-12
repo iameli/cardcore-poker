@@ -1,8 +1,11 @@
 extern crate alloc;
 
 pub mod agent;
+pub mod agent_util;
+pub mod blackjack;
 pub mod card;
 pub mod crypto;
+pub mod engine;
 pub mod error;
 pub mod eval;
 pub mod game;

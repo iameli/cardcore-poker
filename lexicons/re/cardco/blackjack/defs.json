@@ -1,0 +1,118 @@
+{
+  "lexicon": 1,
+  "id": "re.cardco.blackjack.defs",
+  "defs": {
+    "commitSeed": {
+      "type": "object",
+      "description": "Commit a hashed seed for later verification.",
+      "required": ["commitment"],
+      "properties": {
+        "commitment": {
+          "type": "bytes",
+          "maxLength": 32,
+          "description": "BLAKE2b hash of the player's secret seed."
+        }
+      }
+    },
+    "shuffleDeck": {
+      "type": "object",
+      "description": "Encrypt all cards with shuffle key and permute.",
+      "required": ["deck"],
+      "properties": {
+        "deck": {
+          "type": "array",
+          "description": "52 encrypted Ristretto255 points.",
+          "minLength": 52,
+          "maxLength": 52,
+          "items": {
+            "type": "bytes",
+            "maxLength": 32
+          }
+        }
+      }
+    },
+    "lockDeck": {
+      "type": "object",
+      "description": "Remove shuffle encryption and apply per-position lock keys.",
+      "required": ["deck"],
+      "properties": {
+        "deck": {
+          "type": "array",
+          "description": "52 locked Ristretto255 points.",
+          "minLength": 52,
+          "maxLength": 52,
+          "items": {
+            "type": "bytes",
+            "maxLength": 32
+          }
+        }
+      }
+    },
+    "revealLockKey": {
+      "type": "object",
+      "description": "Reveal a per-position lock scalar to deal a card face-up.",
+      "required": ["deckPosition", "scalar"],
+      "properties": {
+        "deckPosition": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 51,
+          "description": "Which card position in the deck is being revealed."
+        },
+        "scalar": {
+          "type": "bytes",
+          "maxLength": 32,
+          "description": "Ristretto255 lock decryption scalar for this position."
+        }
+      }
+    },
+    "wager": {
+      "type": "object",
+      "description": "Post the round wager (escrowed from chips immediately).",
+      "required": ["amount"],
+      "properties": {
+        "amount": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Chips wagered. At least min(minBet, chips), at most the player's chips."
+        }
+      }
+    },
+    "insurance": {
+      "type": "object",
+      "description": "Take or decline insurance against a banker blackjack (offered when the banker upcard is an ace). Costs floor(wager/2); pays 2:1.",
+      "required": ["take"],
+      "properties": {
+        "take": {
+          "type": "boolean",
+          "description": "True to take insurance, false to decline."
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "description": "A playing decision for the hand currently in turn.",
+      "required": ["move"],
+      "properties": {
+        "move": {
+          "type": "string",
+          "maxLength": 16,
+          "knownValues": ["hit", "stand", "double", "split", "surrender"],
+          "description": "The move for the current hand."
+        }
+      }
+    },
+    "verifySeed": {
+      "type": "object",
+      "description": "Reveal the secret seed for full game replay and verification.",
+      "required": ["seed"],
+      "properties": {
+        "seed": {
+          "type": "bytes",
+          "maxLength": 256,
+          "description": "The secret seed. BLAKE2b hash must match the earlier commitment."
+        }
+      }
+    }
+  }
+}

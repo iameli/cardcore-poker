@@ -1,11 +1,13 @@
 <script>
   import { initWasm } from "../lib/cardcore-wasm.js";
   import { Publisher } from "../lib/transport.js";
+  import { DEFAULT_GAME, GAMES } from "../lib/games.js";
 
   let { session, onSignOut, onCreateRoom } = $props();
 
   let creating = $state(false);
   let error = $state("");
+  let selectedGameId = $state(DEFAULT_GAME.id);
 
   $effect(() => {
     initWasm().catch(() => {});
@@ -19,11 +21,17 @@
     creating = true;
     error = "";
     try {
-      const publisher = new Publisher({ client: session.client, did: session.did });
+      const game = GAMES[selectedGameId] ?? DEFAULT_GAME;
+      const publisher = new Publisher({
+        client: session.client,
+        did: session.did,
+        tableCollection: game.tableCollection,
+        actionCollection: game.actionCollection,
+      });
       const result = await publisher.createTable({
         players: [session.did],
-        startingChips: 1000,
-        smallBlind: 10,
+        startingChips: game.defaults.startingChips,
+        [game.stakesField]: game.defaults.stakes,
       });
       onCreateRoom(result.uri);
     } catch (e) {
@@ -53,6 +61,19 @@
     <section class="card">
       <h3>Create Open Room</h3>
       <p class="hint">Create a room and share the link with others to play.</p>
+      <div class="game-picker" data-testid="game-picker">
+        {#each Object.values(GAMES) as game (game.id)}
+          <button
+            class="btn game-option"
+            class:selected={selectedGameId === game.id}
+            onclick={() => (selectedGameId = game.id)}
+            data-testid={`game-pick-${game.id}`}
+          >
+            <span class="game-label">{game.label}</span>
+            <span class="game-desc">{game.description}</span>
+          </button>
+        {/each}
+      </div>
       <button
         class="btn primary"
         onclick={createOpenRoom}
@@ -131,6 +152,31 @@
     color: #1a1a1a;
     opacity: 0.6;
     margin-bottom: 0.75rem;
+  }
+  .game-picker {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .game-option {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+    text-align: left;
+  }
+  .game-option.selected {
+    background: #1a1a1a;
+    color: #ffffff;
+  }
+  .game-label {
+    font-size: 0.45rem;
+    letter-spacing: 1px;
+  }
+  .game-desc {
+    font-size: 0.35rem;
+    opacity: 0.7;
   }
   .btn {
     padding: 0.7rem 1.2rem;

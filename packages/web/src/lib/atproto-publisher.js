@@ -1,17 +1,19 @@
 /**
- * AT Protocol Publisher — re.cardco.poker Lexicons
+ * AT Protocol Publisher — re.cardco.* Lexicons
  *
  * Publishes table and action records using @atcute/client.
- * Schema definitions match lexicons/re/cardco/poker/*.json.
+ * Schema definitions match lexicons/re/cardco/{poker,blackjack}/*.json.
  *
  * Lexicon IDs:
- *   re.cardco.poker.table  — establishes a game
- *   re.cardco.poker.action  — every game action (commit, shuffle, lock, deal, bet, reveal)
- *   re.cardco.poker.defs    — union member types
+ *   re.cardco.poker.table      — establishes a poker game
+ *   re.cardco.poker.action     — every poker action (commit, shuffle, lock, deal, bet, reveal)
+ *   re.cardco.poker.defs       — poker union member types
+ *   re.cardco.blackjack.table  — establishes a blackjack game
+ *   re.cardco.blackjack.action — every blackjack action (commit, shuffle, lock, deal, wager, decision)
+ *   re.cardco.blackjack.defs   — blackjack union member types
  */
 
 import { Client } from "@atcute/client";
-import { encodeRecord } from "./cardcore-wasm.js";
 
 // ─── Lexicon Constants ─────────────────────────────────────────────
 
@@ -30,23 +32,57 @@ export const ACTION_TYPES = {
   VERIFY_SEED: "re.cardco.poker.defs#verifySeed",
 };
 
+export const BLACKJACK_LEXICONS = {
+  TABLE: "re.cardco.blackjack.table",
+  ACTION: "re.cardco.blackjack.action",
+};
+
+export const BLACKJACK_ACTION_TYPES = {
+  COMMIT_SEED: "re.cardco.blackjack.defs#commitSeed",
+  SHUFFLE_DECK: "re.cardco.blackjack.defs#shuffleDeck",
+  LOCK_DECK: "re.cardco.blackjack.defs#lockDeck",
+  REVEAL_LOCK_KEY: "re.cardco.blackjack.defs#revealLockKey",
+  WAGER: "re.cardco.blackjack.defs#wager",
+  INSURANCE: "re.cardco.blackjack.defs#insurance",
+  DECISION: "re.cardco.blackjack.defs#decision",
+  VERIFY_SEED: "re.cardco.blackjack.defs#verifySeed",
+};
+
+/** Every table collection we know how to play. */
+export const TABLE_COLLECTIONS = [LEXICONS.TABLE, BLACKJACK_LEXICONS.TABLE];
+
 // ─── Record Builders ───────────────────────────────────────────────
 
-export function buildTableRecord({ players, startingChips, smallBlind, startedAt, updatedAt }) {
+export function buildTableRecord({
+  collection = LEXICONS.TABLE,
+  players,
+  startingChips,
+  smallBlind,
+  minBet,
+  startedAt,
+  updatedAt,
+}) {
   return {
-    $type: LEXICONS.TABLE,
+    $type: collection,
     players,
     startingChips,
-    smallBlind,
+    ...(smallBlind !== undefined ? { smallBlind } : {}),
+    ...(minBet !== undefined ? { minBet } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(updatedAt ? { updatedAt } : {}),
     createdAt: new Date().toISOString(),
   };
 }
 
-export function buildActionRecord({ tableRef, prevRef, seq, action }) {
+export function buildActionRecord({
+  collection = LEXICONS.ACTION,
+  tableRef,
+  prevRef,
+  seq,
+  action,
+}) {
   return {
-    $type: LEXICONS.ACTION,
+    $type: collection,
     table: tableRef,
     seq,
     action,
@@ -88,6 +124,21 @@ export function buildVerifySeed(seed) {
   return { $type: ACTION_TYPES.VERIFY_SEED, seed };
 }
 
+// Blackjack action payload builders (crypto payloads come from the WASM
+// agent already $type-tagged; these cover the player decisions).
+
+export function buildWager(amount) {
+  return { $type: BLACKJACK_ACTION_TYPES.WAGER, amount };
+}
+
+export function buildInsurance(take) {
+  return { $type: BLACKJACK_ACTION_TYPES.INSURANCE, take };
+}
+
+export function buildDecision(move) {
+  return { $type: BLACKJACK_ACTION_TYPES.DECISION, move };
+}
+
 // ─── AT Protocol Publisher ─────────────────────────────────────────
 
 /**
@@ -115,19 +166,21 @@ export class ATPublisher {
   }
 
   /**
-   * Create a table record. Returns { uri, cid }.
+   * Create a table record. Returns { uri, cid }. Pass a game's table
+   * collection to create for another game (defaults to poker).
    */
-  async createTable({ players, startingChips, smallBlind }) {
-    const record = buildTableRecord({ players, startingChips, smallBlind });
-    return this._createRecord(LEXICONS.TABLE, record);
+  async createTable({ collection = LEXICONS.TABLE, players, startingChips, smallBlind, minBet }) {
+    const record = buildTableRecord({ collection, players, startingChips, smallBlind, minBet });
+    return this._createRecord(collection, record);
   }
 
   /**
-   * Create an action record chained via prev.
+   * Create an action record chained via prev. Pass a game's action
+   * collection to create for another game (defaults to poker).
    */
-  async createAction({ tableRef, prevRef, seq, action }) {
-    const record = buildActionRecord({ tableRef, prevRef, seq, action });
-    return this._createRecord(LEXICONS.ACTION, record);
+  async createAction({ collection = LEXICONS.ACTION, tableRef, prevRef, seq, action }) {
+    const record = buildActionRecord({ collection, tableRef, prevRef, seq, action });
+    return this._createRecord(collection, record);
   }
 
   /**

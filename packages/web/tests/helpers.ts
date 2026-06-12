@@ -1,4 +1,4 @@
-import { expect, Browser, Page } from "@playwright/test";
+import { Browser, expect, Page } from "@playwright/test";
 
 export type Ctx = { ctx: Awaited<ReturnType<Browser["newContext"]>>; page: Page };
 
@@ -20,12 +20,24 @@ export async function readHandle(page: Page): Promise<string> {
   return (await page.locator(".name").first().innerText()).trim();
 }
 
+const TABLE_COLLECTIONS = {
+  poker: "re.cardco.poker.table",
+  blackjack: "re.cardco.blackjack.table",
+};
+
 /**
- * Drive the open-room flow end to end: `a` hosts a room, `b` opens its URL
- * and requests to join, `a` approves and starts. Resolves once both players
- * are in the GameRoom. Returns the table's AT URI.
+ * Drive the open-room flow end to end: `a` hosts a room (`opts.game` picks
+ * the game in the lobby; poker by default), `b` opens its URL and requests
+ * to join, `a` approves and starts. Resolves once both players are in the
+ * game room. Returns the table's AT URI.
  */
-export async function startOpenRoomGame(a: Ctx, b: Ctx): Promise<string> {
+export async function startOpenRoomGame(
+  a: Ctx,
+  b: Ctx,
+  opts: { game?: "poker" | "blackjack" } = {},
+): Promise<string> {
+  const game = opts.game ?? "poker";
+  await a.page.getByTestId(`game-pick-${game}`).click();
   await a.page.getByTestId("create-open-room").click();
   await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
   const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
@@ -35,7 +47,7 @@ export async function startOpenRoomGame(a: Ctx, b: Ctx): Promise<string> {
   const didA = await a.page.evaluate(
     () => JSON.parse(localStorage.getItem("cardcore_demo_session")!).did,
   );
-  const tableUri = `at://${didA}/re.cardco.poker.table/${tid}`;
+  const tableUri = `at://${didA}/${TABLE_COLLECTIONS[game]}/${tid}`;
 
   await b.page.goto(`/${tableUri}`);
   await b.page.getByTestId("request-join").click();

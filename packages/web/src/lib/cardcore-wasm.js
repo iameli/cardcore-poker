@@ -6,7 +6,11 @@
  * shuffle+lock protocol described in the README.
  */
 
-import init, { WasmAgent, simulate_game } from "../../../../pkg/cardcore_poker.js";
+import init, {
+  simulate_game,
+  WasmAgent,
+  WasmBlackjackAgent,
+} from "../../../../pkg/cardcore_poker.js";
 import * as dagCbor from "@ipld/dag-cbor";
 
 // ─── WASM Init ─────────────────────────────────────────────────────
@@ -34,6 +38,16 @@ export function createAgent(did, seed) {
     throw new Error("seed must be Uint8Array or string");
   }
   return new WasmAgent(did, seed);
+}
+
+export function createBlackjackAgent(did, seed) {
+  if (typeof seed === "string") {
+    seed = new TextEncoder().encode(seed);
+  }
+  if (!(seed instanceof Uint8Array)) {
+    throw new Error("seed must be Uint8Array or string");
+  }
+  return new WasmBlackjackAgent(did, seed);
 }
 
 export function encodeRecord(record) {

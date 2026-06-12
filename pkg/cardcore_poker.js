@@ -205,6 +205,286 @@ export class WasmAgent {
 if (Symbol.dispose) WasmAgent.prototype[Symbol.dispose] = WasmAgent.prototype.free;
 
 /**
+ * Result from the blackjack agent: actions to emit, an interactive need, or
+ * waiting.
+ */
+export class WasmBjOutput {
+    /**
+     * Number of actions to emit.
+     * @returns {number}
+     */
+    get action_count() {
+        const ret = wasm.wasmbjoutput_action_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+
+    /**
+     * @returns {string}
+     */
+    get kind() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmbjoutput_kind(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    /**
+     * Options as JSON (for "need_wager" and "need_decision" kinds).
+     * @returns {string}
+     */
+    get options() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmbjoutput_options(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(WasmBjOutput.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmBjOutputFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmBjOutputFinalization.unregister(this);
+        return ptr;
+    }
+
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmbjoutput_free(ptr, 0);
+    }
+
+    /**
+     * Get the nth action as CBOR bytes.
+     * @param {number} index
+     * @returns {Uint8Array}
+     */
+    action(index) {
+        const ret = wasm.wasmbjoutput_action(this.__wbg_ptr, index);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+}
+if (Symbol.dispose) WasmBjOutput.prototype[Symbol.dispose] = WasmBjOutput.prototype.free;
+
+export class WasmBlackjackAgent {
+    /**
+     * Create a new agent with a DID and secret seed.
+     * @param {string} did
+     * @param {Uint8Array} seed
+     */
+    constructor(did, seed) {
+        const ptr0 = passStringToWasm0(did, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(seed, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmblackjackagent_new(ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        this.__wbg_ptr = ret[0] >>> 0;
+        WasmBlackjackAgentFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmBlackjackAgentFinalization.unregister(this);
+        return ptr;
+    }
+
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmblackjackagent_free(ptr, 0);
+    }
+
+    /**
+     * Submit a player action. One of: "wager:AMOUNT", "insurance:yes",
+     * "insurance:no", "hit", "stand", "double", "split", "surrender".
+     * @param {string} action
+     * @returns {WasmBjOutput}
+     */
+    act(action) {
+        const ptr0 = passStringToWasm0(action, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmblackjackagent_act(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmBjOutput.__wrap(ret[0]);
+    }
+
+    /**
+     * The banker's face-up cards as JSON array of strings.
+     * @returns {string}
+     */
+    banker_cards() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmblackjackagent_banker_cards(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    /**
+     * Check if we need a wager, insurance answer, or decision.
+     * @returns {WasmBjOutput}
+     */
+    check_status() {
+        const ret = wasm.wasmblackjackagent_check_status(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmBjOutput.__wrap(ret[0]);
+    }
+
+    /**
+     * Whether the whole game is over (at most one player has chips).
+     * @returns {boolean}
+     */
+    game_over() {
+        const ret = wasm.wasmblackjackagent_game_over(this.__wbg_ptr);
+        return ret !== 0;
+    }
+
+    /**
+     * Get game state as JSON: minBet, banker, bankerCards, actionOn, players.
+     * @returns {string}
+     */
+    game_state() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmblackjackagent_game_state(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    /**
+     * JSON of the most recently completed round's result, or "" if none yet.
+     * @returns {string}
+     */
+    last_round_result() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmblackjackagent_last_round_result(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    /**
+     * This player's hand(s) as JSON (e.g., [["8c","8d"]]; two arrays after a split).
+     * @returns {string}
+     */
+    my_hands() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmblackjackagent_my_hands(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+
+    /**
+     * Advance to the next round (call after the current round is Complete
+     * and the game isn't over). Returns this player's actions for the new
+     * round.
+     * @returns {WasmBjOutput}
+     */
+    next_round() {
+        const ret = wasm.wasmblackjackagent_next_round(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmBjOutput.__wrap(ret[0]);
+    }
+    /**
+     * Get the current protocol phase.
+     * Returns: "Init", "CommitSeeds", "Shuffle", "Lock", "Wagering",
+     * "Dealing", "Insurance", "PlayerTurn", "Complete"
+     * @returns {string}
+     */
+    phase() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmblackjackagent_phase(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Feed a DAG-CBOR action from any player.
+     * @param {Uint8Array} cbor
+     * @returns {WasmBjOutput}
+     */
+    receive_action(cbor) {
+        const ptr0 = passArray8ToWasm0(cbor, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmblackjackagent_receive_action(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmBjOutput.__wrap(ret[0]);
+    }
+    /**
+     * Feed a DAG-CBOR table record. Returns actions to emit.
+     * @param {Uint8Array} cbor
+     * @returns {WasmBjOutput}
+     */
+    receive_table(cbor) {
+        const ptr0 = passArray8ToWasm0(cbor, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmblackjackagent_receive_table(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return WasmBjOutput.__wrap(ret[0]);
+    }
+}
+if (Symbol.dispose) WasmBlackjackAgent.prototype[Symbol.dispose] = WasmBlackjackAgent.prototype.free;
+
+/**
  * Result from the agent: either actions to emit, a bet decision needed, or waiting.
  */
 export class WasmOutput {
@@ -345,6 +625,12 @@ function __wbg_get_imports() {
 const WasmAgentFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmagent_free(ptr >>> 0, 1));
+const WasmBjOutputFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmbjoutput_free(ptr >>> 0, 1));
+const WasmBlackjackAgentFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmblackjackagent_free(ptr >>> 0, 1));
 const WasmOutputFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmoutput_free(ptr >>> 0, 1));

@@ -1,11 +1,12 @@
 /**
- * AT Protocol record publisher for the poker protocol.
+ * AT Protocol record publisher for the card-game protocols.
  *
- * Players publish their actions as `re.cardco.poker.action` records to their
- * own PDS. Reads happen via `lib/firehose.js`'s subscribeRepos subscription.
+ * Players publish their actions as `re.cardco.{poker,blackjack}.action`
+ * records to their own PDS. Reads happen via `lib/firehose.js`'s
+ * subscribeRepos subscription.
  */
 import * as dagCbor from "@ipld/dag-cbor";
-import { buildActionRecord, buildTableRecord, LEXICONS } from "./atproto-publisher.js";
+import { buildActionRecord, buildTableRecord, LEXICONS, TABLE_COLLECTIONS, } from "./atproto-publisher.js";
 import { pdsForDid } from "./atproto.js";
 
 /**
@@ -16,8 +17,8 @@ export async function fetchTableRecord(uri, ownPdsUri) {
   const m = uri.match(/^at:\/\/([^/]+)\/([^/]+)\/(.+)$/);
   if (!m) throw new Error(`Bad table URI: ${uri}`);
   const [, repo, collection, rkey] = m;
-  if (collection !== LEXICONS.TABLE) {
-    throw new Error(`URI is not a poker table: ${collection}`);
+  if (!TABLE_COLLECTIONS.includes(collection)) {
+    throw new Error(`URI is not a known game table: ${collection}`);
   }
   const pds = await pdsForDid(repo, ownPdsUri);
   const url =
@@ -81,27 +82,52 @@ function dehydrateBytes(value) {
 
 /**
  * Publishes records to the player's PDS via the @atcute Client we already
- * built during signin.
+ * built during signin. Collections default to poker; pass a game's
+ * `tableCollection`/`actionCollection` to publish for another game.
  */
 export class Publisher {
-  constructor({ client, did }) {
+  constructor({
+    client,
+    did,
+    tableCollection = LEXICONS.TABLE,
+    actionCollection = LEXICONS.ACTION,
+  }) {
     this.client = client;
     this.did = did;
+    this.tableCollection = tableCollection;
+    this.actionCollection = actionCollection;
   }
 
-  async createTable({ players, startingChips, smallBlind }) {
-    const record = buildTableRecord({ players, startingChips, smallBlind });
-    return this._createRecord(LEXICONS.TABLE, record);
+  async createTable({ players, startingChips, smallBlind, minBet }) {
+    const record = buildTableRecord({
+      collection: this.tableCollection,
+      players,
+      startingChips,
+      smallBlind,
+      minBet,
+    });
+    return this._createRecord(this.tableCollection, record);
   }
 
-  async publishTableWithRkey(rkey, { players, startingChips, smallBlind, startedAt, updatedAt }) {
-    const record = buildTableRecord({ players, startingChips, smallBlind, startedAt, updatedAt });
-    return this._createWithRkey(LEXICONS.TABLE, rkey, record);
+  async publishTableWithRkey(
+    rkey,
+    { players, startingChips, smallBlind, minBet, startedAt, updatedAt },
+  ) {
+    const record = buildTableRecord({
+      collection: this.tableCollection,
+      players,
+      startingChips,
+      smallBlind,
+      minBet,
+      startedAt,
+      updatedAt,
+    });
+    return this._createWithRkey(this.tableCollection, rkey, record);
   }
 
   /**
-   * Publish a single poker action. Used for actions the local agent emits.
-   * `actionCbor` is the raw CBOR the WasmAgent produced; we decode it to
+   * Publish a single game action. Used for actions the local agent emits.
+   * `actionCbor` is the raw CBOR the WASM agent produced; we decode it to
    * reconstitute the inner action object as the lexicon expects.
    */
   async publishAction({ tableRef, prevRef, seq, tableTid, actionCbor }) {
@@ -111,12 +137,13 @@ export class Publisher {
     // objects, which the Rust lexicon parser rejects on read.
     const innerAction = dehydrateBytes(dagCbor.decode(actionCbor));
     const record = buildActionRecord({
+      collection: this.actionCollection,
       tableRef,
       prevRef,
       seq,
       action: innerAction,
     });
-    return this._createWithRkey(LEXICONS.ACTION, rkeyForSeq(tableTid, seq), record);
+    return this._createWithRkey(this.actionCollection, rkeyForSeq(tableTid, seq), record);
   }
 
   async _createRecord(collection, record) {
