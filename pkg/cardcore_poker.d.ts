@@ -47,9 +47,11 @@ export class WasmAgent {
      */
     phase(): string;
     /**
-     * Feed a DAG-CBOR action from any player.
+     * Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
+     * the record came from. Attribution by author is what keeps replay
+     * deterministic; see PlayerAgent::receive_action.
      */
-    receive_action(cbor: Uint8Array): WasmOutput;
+    receive_action(cbor: Uint8Array, author_did: string): WasmOutput;
     /**
      * Feed a DAG-CBOR table record. Returns actions to emit.
      */
@@ -106,7 +108,7 @@ export interface InitOutput {
     readonly wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly wasmagent_next_hand: (a: number) => [number, number, number];
     readonly wasmagent_phase: (a: number) => [number, number];
-    readonly wasmagent_receive_action: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmagent_receive_action: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
     readonly wasmagent_waiting_on: (a: number) => [number, number];
     readonly wasmoutput_action: (a: number, b: number) => [number, number];

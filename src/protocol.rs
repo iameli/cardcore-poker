@@ -368,6 +368,37 @@ impl ProtocolState {
                     return Err(crate::Error::InvalidAction("not your turn to bet".into()));
                 }
 
+                // Validate against the betting rules before mutating state. An
+                // accepted under-raise would LOWER current_bet, after which
+                // all-bets-level can never be satisfied and the betting round
+                // can't close (players check around forever).
+                let player = &self.game.players[*player_id];
+                let to_call = self.game.current_bet.saturating_sub(player.bet_this_street);
+                match action {
+                    BetAction::Check if to_call > 0 => {
+                        return Err(crate::Error::InvalidAction(format!(
+                            "cannot check facing a bet ({} to call)",
+                            to_call
+                        )));
+                    }
+                    BetAction::Raise(total) => {
+                        let min_total = self.game.current_bet + self.game.big_blind;
+                        if *total < min_total {
+                            return Err(crate::Error::InvalidAction(format!(
+                                "raise to {} is below the minimum of {} (current bet {} + big blind {})",
+                                total, min_total, self.game.current_bet, self.game.big_blind
+                            )));
+                        }
+                        if player.bet_this_street + player.chips < *total {
+                            return Err(crate::Error::InvalidAction(format!(
+                                "raise to {} exceeds stack; use allIn",
+                                total
+                            )));
+                        }
+                    }
+                    _ => {}
+                }
+
                 let round_over = self.game.apply_bet(*player_id, action);
 
                 if self.game.active_player_count() <= 1 {
@@ -550,9 +581,13 @@ impl ProtocolState {
 
         actions.push(BetAction::Fold);
 
+        // The minimum raise TOTAL for the street. `to_call + min_raise` would
+        // be wrong for a player with chips already in this street (e.g. the
+        // big blind): it can equal current_bet, which isn't a raise at all.
         let min_raise = self.game.big_blind;
-        if player.chips > to_call + min_raise {
-            actions.push(BetAction::Raise(to_call + min_raise));
+        let min_raise_total = self.game.current_bet + min_raise;
+        if player.bet_this_street + player.chips > min_raise_total {
+            actions.push(BetAction::Raise(min_raise_total));
         }
 
         if player.chips > 0 {
@@ -1177,5 +1212,89 @@ mod tests {
             seed: b"fake".to_vec(),
         });
         assert!(result.is_err());
+    }
+
+    fn bet(st: &mut ProtocolState, seat: usize, action: BetAction) -> crate::Result<()> {
+        st.apply(&Action::Bet {
+            player_id: seat,
+            action,
+        })
+    }
+
+    /// Regression for table 3mrqkfazprl2e (2026-07-28): on the flop the action
+    /// went check, raise to 50, call, fold — then a "raise" to 20. The engine
+    /// accepted the under-raise and LOWERED current_bet to 20, after which
+    /// all-bets-level could never be satisfied and the round couldn't close:
+    /// three players checked around in circles until an over-raise unstuck it.
+    #[test]
+    fn under_raise_is_rejected_and_round_still_closes() {
+        let mut st = setup_table(5);
+        st.phase = Phase::Betting;
+        st.game.new_street(Street::Flop);
+        st.game.start_betting_round();
+        assert_eq!(st.game.action_on, Some(1));
+
+        bet(&mut st, 1, BetAction::Check).unwrap();
+        bet(&mut st, 2, BetAction::Raise(50)).unwrap();
+        bet(&mut st, 3, BetAction::Call).unwrap();
+        bet(&mut st, 4, BetAction::Fold).unwrap();
+
+        // The under-raise to 20 must be rejected outright…
+        assert!(bet(&mut st, 0, BetAction::Raise(20)).is_err());
+        // …as must a "raise" that merely matches the current bet…
+        assert!(bet(&mut st, 0, BetAction::Raise(50)).is_err());
+        // …and the current bet must be untouched by the attempts.
+        assert_eq!(st.game.current_bet, 50);
+        // Checking while facing 50 is equally invalid.
+        assert!(bet(&mut st, 0, BetAction::Check).is_err());
+
+        // Legal actions close the round normally: seat 0 calls, and seat 1
+        // (who checked before the raise) calls behind.
+        bet(&mut st, 0, BetAction::Call).unwrap();
+        assert!(matches!(st.phase, Phase::Betting));
+        bet(&mut st, 1, BetAction::Call).unwrap();
+        assert!(
+            matches!(st.phase, Phase::Dealing { .. }),
+            "round should close and deal the turn, got {:?}",
+            st.phase
+        );
+    }
+
+    /// The suggested min-raise must be a raise TOTAL above the current bet.
+    /// `to_call + big_blind` is wrong for a player with chips already in this
+    /// street (e.g. the big blind): it can equal current_bet — a call
+    /// masquerading as a raise, which also re-opened the betting round.
+    #[test]
+    fn min_raise_option_exceeds_current_bet_for_the_big_blind() {
+        let mut st = setup_table(5);
+        st.phase = Phase::Betting;
+        st.game.post_blinds();
+        st.game.start_betting_round();
+        assert_eq!(st.game.action_on, Some(3), "first to act is left of BB");
+
+        bet(&mut st, 3, BetAction::Raise(50)).unwrap();
+        bet(&mut st, 4, BetAction::Fold).unwrap();
+        bet(&mut st, 0, BetAction::Fold).unwrap();
+        bet(&mut st, 1, BetAction::Fold).unwrap();
+
+        // Big blind (seat 2) already has 20 in this street, facing 50.
+        let valid = st.valid_actions();
+        assert_eq!(valid.len(), 1);
+        assert_eq!(valid[0].player_id, 2);
+        let ValidActionKind::Bet { options } = &valid[0].kind else {
+            panic!("expected bet options, got {:?}", valid[0].kind);
+        };
+        assert!(
+            options.contains(&BetAction::Raise(70)),
+            "min-raise should be to 70 (current bet 50 + big blind 20), got {:?}",
+            options
+        );
+        assert!(
+            !options
+                .iter()
+                .any(|o| matches!(o, BetAction::Raise(t) if *t <= 50)),
+            "no suggested raise may be at or below the current bet: {:?}",
+            options
+        );
     }
 }

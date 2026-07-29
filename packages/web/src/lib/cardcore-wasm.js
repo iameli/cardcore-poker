@@ -82,10 +82,12 @@ export class CardcoreSession {
     return allActions;
   }
 
-  processAction(actionCbor) {
+  processAction(actionCbor, authorDid) {
     const allActions = [];
     for (const did of this.playerOrder) {
-      const output = this.agents[did].receive_action(actionCbor);
+      // The author's own agent already applied this action when it emitted it.
+      if (did === authorDid) continue;
+      const output = this.agents[did].receive_action(actionCbor, authorDid);
       this._collect(output, allActions);
     }
     return allActions;

@@ -86,10 +86,12 @@ impl WasmAgent {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    /// Feed a DAG-CBOR action from any player.
-    pub fn receive_action(&mut self, cbor: &[u8]) -> Result<WasmOutput, JsValue> {
+    /// Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
+    /// the record came from. Attribution by author is what keeps replay
+    /// deterministic; see PlayerAgent::receive_action.
+    pub fn receive_action(&mut self, cbor: &[u8], author_did: &str) -> Result<WasmOutput, JsValue> {
         self.inner
-            .receive_action(cbor)
+            .receive_action(cbor, author_did)
             .map(to_wasm_output)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }

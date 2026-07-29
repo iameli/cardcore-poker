@@ -33,7 +33,11 @@ fn collect_actions(output: AgentOutput) -> Vec<Vec<u8>> {
     }
 }
 
+const ALICE_DID: &str = "did:plc:alice";
+const BOB_DID: &str = "did:plc:bob";
+
 /// Relay actions between two agents until both idle or one needs a bet.
+/// Everything bound for bob was authored by alice, and vice versa.
 fn relay(
     alice: &mut PlayerAgent,
     bob: &mut PlayerAgent,
@@ -74,13 +78,13 @@ fn relay(
 
         if let Some(action) = for_bob.first().cloned() {
             for_bob.remove(0);
-            if let AgentOutput::Actions(a) = bob.receive_action(&action).unwrap() {
+            if let AgentOutput::Actions(a) = bob.receive_action(&action, ALICE_DID).unwrap() {
                 for_alice.extend(a);
             }
         }
         if let Some(action) = for_alice.first().cloned() {
             for_alice.remove(0);
-            if let AgentOutput::Actions(a) = alice.receive_action(&action).unwrap() {
+            if let AgentOutput::Actions(a) = alice.receive_action(&action, BOB_DID).unwrap() {
                 for_bob.extend(a);
             }
         }
@@ -120,8 +124,8 @@ fn two_agents_full_hand_in_browser() {
     assert_eq!(bob_commit.len(), 1);
 
     // Exchange commits
-    let for_bob = collect_actions(alice.receive_action(&bob_commit[0]).unwrap());
-    let for_alice = collect_actions(bob.receive_action(&alice_commit[0]).unwrap());
+    let for_bob = collect_actions(alice.receive_action(&bob_commit[0], BOB_DID).unwrap());
+    let for_alice = collect_actions(bob.receive_action(&alice_commit[0], ALICE_DID).unwrap());
 
     // Relay through shuffle, lock, deal
     let (a_bet, b_bet) = relay(&mut alice, &mut bob, for_bob, for_alice);
@@ -193,15 +197,16 @@ fn three_player_hand_in_browser() {
         for j in 0..3 {
             if i != j {
                 for action in &commits[j] {
-                    let _ = agents[i].receive_action(action);
+                    let _ = agents[i].receive_action(action, dids[j]);
                 }
             }
         }
     }
 
     // Now relay between all three agents until betting
-    // Simple approach: round-robin collecting and distributing actions
-    let mut queues: Vec<Vec<Vec<u8>>> = vec![vec![]; 3];
+    // Simple approach: round-robin collecting and distributing
+    // (author index, action) pairs
+    let mut queues: Vec<Vec<(usize, Vec<u8>)>> = vec![vec![]; 3];
 
     // Initial auto-respond
     for i in 0..3 {
@@ -209,7 +214,7 @@ fn three_player_hand_in_browser() {
             // Send to all other agents
             for j in 0..3 {
                 if j != i {
-                    queues[j].extend(a.clone());
+                    queues[j].extend(a.iter().map(|x| (i, x.clone())));
                 }
             }
         }
@@ -220,12 +225,14 @@ fn three_player_hand_in_browser() {
 
         for i in 0..3 {
             let my_queue = std::mem::take(&mut queues[i]);
-            for action in &my_queue {
+            for (author, action) in &my_queue {
                 any_progress = true;
-                if let AgentOutput::Actions(responses) = agents[i].receive_action(action).unwrap() {
+                if let AgentOutput::Actions(responses) =
+                    agents[i].receive_action(action, dids[*author]).unwrap()
+                {
                     for j in 0..3 {
                         if j != i {
-                            queues[j].extend(responses.clone());
+                            queues[j].extend(responses.iter().map(|x| (i, x.clone())));
                         }
                     }
                 }
@@ -239,7 +246,7 @@ fn three_player_hand_in_browser() {
                     any_progress = true;
                     for j in 0..3 {
                         if j != i {
-                            queues[j].extend(a.clone());
+                            queues[j].extend(a.iter().map(|x| (i, x.clone())));
                         }
                     }
                 }
@@ -260,7 +267,7 @@ fn three_player_hand_in_browser() {
             if let AgentOutput::Actions(a) = agents[idx].bet(bet).unwrap() {
                 for j in 0..3 {
                     if j != idx {
-                        queues[j].extend(a.clone());
+                        queues[j].extend(a.iter().map(|x| (idx, x.clone())));
                     }
                 }
             }

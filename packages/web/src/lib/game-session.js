@@ -8,7 +8,7 @@
  * Lifecycle:
  *   1. construct (creates the WasmAgent with a fresh seed)
  *   2. receiveTable(tableCbor) once — kicks off CommitSeed emission
- *   3. receiveAction(cbor) for each peer action delivered
+ *   3. receiveAction(cbor, {did}) for each peer action delivered
  *   4. bet(action) when the UI receives a betting decision
  *
  * The session calls `publishAction({ seq, cbor })` for every action the
@@ -53,26 +53,32 @@ export class PlayerSession {
   }
 
   /**
-   * Feed an action record. `fromSelf`/`seq` identify records from our own
-   * repo (live echo or reload replay): slots we've already emitted are
-   * dropped, while ones that apply (our past bets — human choices, not
-   * re-derivable from the seed) claim their original publish-seq slot so
-   * future rkeys don't collide with existing records.
+   * Feed an action record authored by `did` (the repo it came from — REQUIRED
+   * for consensus: the engine attributes the action to the author's seat, and
+   * a wrong or missing author misattributes bets during concurrent replay).
+   * `fromSelf`/`seq` identify records from our own repo (live echo or reload
+   * replay): slots we've already emitted are dropped, while ones that apply
+   * (our past bets — human choices, not re-derivable from the seed) claim
+   * their original publish-seq slot so future rkeys don't collide with
+   * existing records.
    */
-  async receiveAction(actionCbor, { fromSelf = false, seq = null } = {}) {
+  async receiveAction(actionCbor, { did, fromSelf = false, seq = null } = {}) {
     if (fromSelf && this._selfSeqsDone.has(seq)) return;
+    const author = fromSelf ? this.did : did;
+    if (!author) throw new Error("receiveAction requires the author did");
     try {
-      const out = this.agent.receive_action(actionCbor);
+      const out = this.agent.receive_action(actionCbor, author);
       if (fromSelf) {
         this._selfSeqsDone.add(seq);
         this.seq = Math.max(this.seq, seq + 1);
       }
       await this._processOutput(out);
     } catch (e) {
-      // Not valid in our current phase yet — buffer and retry on the next
-      // successful transition rather than dropping it (the firehose won't
-      // redeliver, so dropping would deadlock the hand boundary).
-      this._pending.push({ cbor: actionCbor, fromSelf, seq });
+      // Not valid in our current phase yet (or not that player's turn yet) —
+      // buffer and retry on the next successful transition rather than
+      // dropping it (the firehose won't redeliver, so dropping would deadlock
+      // the hand boundary).
+      this._pending.push({ cbor: actionCbor, did: author, fromSelf, seq });
       return;
     }
     await this._drainPending();
@@ -108,7 +114,7 @@ export class PlayerSession {
           continue;
         }
         try {
-          const out = this.agent.receive_action(item.cbor);
+          const out = this.agent.receive_action(item.cbor, item.did);
           if (item.fromSelf) {
             this._selfSeqsDone.add(item.seq);
             this.seq = Math.max(this.seq, item.seq + 1);

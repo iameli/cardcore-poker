@@ -10,10 +10,10 @@ use rand::prelude::SliceRandom;
 
 use crate::crypto::{self, PlayerKeys, PlayerRng, Point, Scalar};
 use crate::game::BetAction;
-use crate::lexicon::re_cardco::poker::action::{Action as LexAction, ActionAction};
+use crate::lexicon::re_cardco::poker::action::ActionAction;
 use crate::lexicon::re_cardco::poker::table::Table as LexTable;
 use crate::lexicon::re_cardco::poker::*;
-use crate::protocol::{self, Action, Phase, ProtocolState, ValidActionKind};
+use crate::protocol::{Action, Phase, ProtocolState, ValidActionKind};
 
 /// What the agent needs from the caller.
 #[derive(Debug)]
@@ -35,6 +35,11 @@ pub struct PlayerAgent {
     keys: PlayerKeys,
     state: ProtocolState,
     seat: Option<usize>,
+    /// The table roster, in seat order. Used to attribute received actions to
+    /// the seat of the repo they came from — attribution must come from the
+    /// author, never be inferred from whose turn the state machine thinks it
+    /// is, or concurrent replay ends up applying actions to the wrong player.
+    player_dids: Vec<String>,
     seq: i64,
     table_tid: Option<String>,
     /// Which hand we're playing — must track protocol.hand_index for key derivation.
@@ -55,6 +60,7 @@ impl PlayerAgent {
             keys,
             state: ProtocolState::new(),
             seat: None,
+            player_dids: Vec::new(),
             seq: 0,
             table_tid: None,
             hand_index: 0,
@@ -121,6 +127,7 @@ impl PlayerAgent {
             .iter()
             .map(|d| d.as_str().to_string())
             .collect();
+        self.player_dids = players.clone();
 
         // Apply table to protocol state
         self.state.apply(&Action::Table {
@@ -133,11 +140,25 @@ impl PlayerAgent {
         self.auto_respond()
     }
 
-    /// Feed a DAG-CBOR encoded action payload from any player.
-    /// The payload is a map with a `$type` field for dispatch.
-    pub fn receive_action(&mut self, cbor: &[u8]) -> crate::Result<AgentOutput> {
+    /// Feed a DAG-CBOR encoded action payload authored by `author_did` (the
+    /// DID of the repo the record was fetched from). The payload is a map with
+    /// a `$type` field for dispatch.
+    ///
+    /// The author identity is load-bearing for consensus: the action is
+    /// attributed to the author's seat and the state machine validates it for
+    /// that seat. Attribution must never be inferred from whose turn it is —
+    /// during a concurrent multi-repo replay, actions arrive in arbitrary
+    /// interleavings, and turn-order guessing applies them to the wrong player.
+    pub fn receive_action(&mut self, cbor: &[u8], author_did: &str) -> crate::Result<AgentOutput> {
+        let author_seat = self
+            .player_dids
+            .iter()
+            .position(|d| d == author_did)
+            .ok_or_else(|| {
+                crate::Error::InvalidAction(format!("author {} is not at the table", author_did))
+            })?;
         let action = decode_action_cbor(cbor)?;
-        let internal_action = self.lex_action_to_internal(&action, self.seq)?;
+        let internal_action = self.lex_action_to_internal(&action, author_seat)?;
         self.state.apply(&internal_action)?;
         self.seq += 1;
         self.auto_respond()
@@ -480,19 +501,17 @@ impl PlayerAgent {
             .map_err(|e| crate::Error::Protocol(format!("CBOR encode failed: {}", e)))
     }
 
-    /// Convert a lexicon action to an internal protocol action.
+    /// Convert a lexicon action to an internal protocol action, attributed to
+    /// the author's seat. The state machine then validates the action for that
+    /// specific seat (turn order, duplicate commits/reveals, phase).
     fn lex_action_to_internal(
         &self,
         action: &ActionAction<'_>,
-        _seq: i64,
+        author_seat: usize,
     ) -> crate::Result<Action> {
-        // Figure out which player this is from based on valid_actions
-        let valid = self.state.valid_actions();
-
         match action {
             ActionAction::CommitSeed(cs) => {
-                let player_id =
-                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::CommitSeed))?;
+                let player_id = author_seat;
                 let mut commitment = [0u8; crypto::HASH_BYTES];
                 commitment.copy_from_slice(&cs.commitment);
                 Ok(Action::CommitSeed {
@@ -501,8 +520,7 @@ impl PlayerAgent {
                 })
             }
             ActionAction::ShuffleDeck(sd) => {
-                let player_id =
-                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::ShuffleDeck))?;
+                let player_id = author_seat;
                 let deck: Vec<Point> = sd
                     .deck
                     .iter()
@@ -515,8 +533,7 @@ impl PlayerAgent {
                 Ok(Action::ShuffleDeck { player_id, deck })
             }
             ActionAction::LockDeck(ld) => {
-                let player_id =
-                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::LockDeck))?;
+                let player_id = author_seat;
                 let deck: Vec<Point> = ld
                     .deck
                     .iter()
@@ -530,10 +547,7 @@ impl PlayerAgent {
             }
             ActionAction::RevealLockKey(rlk) => {
                 let pos = rlk.deck_position as usize;
-                let player_id = find_player_for_action(
-                    &valid,
-                    |k| matches!(k, ValidActionKind::RevealLockKey { deck_position } if *deck_position == pos),
-                )?;
+                let player_id = author_seat;
                 let mut scalar_arr = [0u8; crypto::SCALAR_BYTES];
                 scalar_arr.copy_from_slice(&rlk.scalar);
                 Ok(Action::RevealLockKey {
@@ -543,10 +557,11 @@ impl PlayerAgent {
                 })
             }
             ActionAction::Bet(bet) => {
-                let player_id =
-                    find_player_for_action(&valid, |k| matches!(k, ValidActionKind::Bet { .. }))?;
                 let action = lex_bet_to_internal(bet);
-                Ok(Action::Bet { player_id, action })
+                Ok(Action::Bet {
+                    player_id: author_seat,
+                    action,
+                })
             }
             ActionAction::RevealHand(rh) => {
                 // Match by deck positions — each player has unique hole card positions
@@ -569,6 +584,12 @@ impl PlayerAgent {
                             "reveal positions don't match any player".into(),
                         )
                     })?;
+                if player_id != author_seat {
+                    return Err(crate::Error::InvalidAction(format!(
+                        "revealHand positions belong to seat {} but the record was authored by seat {}",
+                        player_id, author_seat
+                    )));
+                }
                 let scalars: Vec<(usize, Scalar)> = rh
                     .reveals
                     .iter()
@@ -599,6 +620,12 @@ impl PlayerAgent {
                             "seed doesn't match any unverified commitment".into(),
                         )
                     })?;
+                if player_id != author_seat {
+                    return Err(crate::Error::InvalidAction(format!(
+                        "seed matches seat {}'s commitment but the record was authored by seat {}",
+                        player_id, author_seat
+                    )));
+                }
                 Ok(Action::VerifySeed {
                     player_id,
                     seed: seed_bytes,
@@ -679,18 +706,6 @@ fn per_hand_seed(master_seed: &[u8], hand_index: u64) -> crate::Result<Vec<u8>> 
     data.extend_from_slice(master_seed);
     data.extend_from_slice(&hand_index.to_le_bytes());
     Ok(crypto::blake2b(&data)?.to_vec())
-}
-
-/// Find which player should be performing an action of this type.
-fn find_player_for_action(
-    valid: &[protocol::ValidAction],
-    predicate: impl Fn(&ValidActionKind) -> bool,
-) -> crate::Result<usize> {
-    valid
-        .iter()
-        .find(|va| predicate(&va.kind))
-        .map(|va| va.player_id)
-        .ok_or_else(|| crate::Error::InvalidAction("no valid action of this type".into()))
 }
 
 fn bet_action_to_lex(action: &BetAction) -> BetAction2 {

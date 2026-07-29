@@ -156,14 +156,19 @@ export class WasmAgent {
         }
     }
     /**
-     * Feed a DAG-CBOR action from any player.
+     * Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
+     * the record came from. Attribution by author is what keeps replay
+     * deterministic; see PlayerAgent::receive_action.
      * @param {Uint8Array} cbor
+     * @param {string} author_did
      * @returns {WasmOutput}
      */
-    receive_action(cbor) {
+    receive_action(cbor, author_did) {
         const ptr0 = passArray8ToWasm0(cbor, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmagent_receive_action(this.__wbg_ptr, ptr0, len0);
+        const ptr1 = passStringToWasm0(author_did, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmagent_receive_action(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

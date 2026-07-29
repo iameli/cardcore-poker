@@ -16,7 +16,7 @@ pub enum Street {
     Showdown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BetAction {
     Fold,
     Check,
@@ -278,7 +278,12 @@ impl GameState {
                     self.players[player_id].all_in = true;
                 }
                 self.pot += amount;
-                self.current_bet = self.players[player_id].bet_this_street;
+                // Never lower the current bet: an under-raise (validated away
+                // upstream, but guarded here too) would make all-bets-level
+                // unsatisfiable and the round impossible to close.
+                self.current_bet = self
+                    .current_bet
+                    .max(self.players[player_id].bet_this_street);
                 // Reset action count — everyone needs to act again
                 self.actions_this_round = 0;
             }
@@ -330,5 +335,25 @@ impl GameState {
         for p in &mut self.players {
             p.bet_this_street = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Even if an under-raise slips past upstream validation, applying it must
+    /// never LOWER the current bet — a lowered bet makes all-bets-level
+    /// unsatisfiable and the betting round impossible to close.
+    #[test]
+    fn apply_bet_never_lowers_current_bet() {
+        let mut g = GameState::new(3, 1000, 10);
+        g.new_street(Street::Flop);
+        g.start_betting_round();
+
+        g.apply_bet(0, &BetAction::Raise(50));
+        assert_eq!(g.current_bet, 50);
+        g.apply_bet(1, &BetAction::Raise(20));
+        assert_eq!(g.current_bet, 50, "under-raise must not lower the bet");
     }
 }

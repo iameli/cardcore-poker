@@ -107,7 +107,8 @@ pub struct Simulator {
     config: SimConfig,
     events: Vec<GameEvent>,
     /// CBOR actions queued for each agent (indexed by agent, contains actions from others).
-    queues: Vec<Vec<Vec<u8>>>,
+    /// Per-recipient inbox of (author index, action cbor) pairs.
+    queues: Vec<Vec<(usize, Vec<u8>)>>,
     card_map: HashMap<Point, Card>,
     rng: u64,
     done: bool,
@@ -263,8 +264,9 @@ impl Simulator {
             let mut progress = false;
             for i in 0..self.agents.len() {
                 let queue = std::mem::take(&mut self.queues[i]);
-                for action in &queue {
-                    match self.agents[i].receive_action(action)? {
+                for (author, action) in &queue {
+                    let author_did = self.dids[*author].clone();
+                    match self.agents[i].receive_action(action, &author_did)? {
                         AgentOutput::Actions(responses) => {
                             self.broadcast_actions(i, &responses);
                             progress = true;
@@ -534,7 +536,7 @@ impl Simulator {
     fn broadcast_actions(&mut self, from: usize, actions: &[Vec<u8>]) {
         for i in 0..self.agents.len() {
             if i != from {
-                self.queues[i].extend(actions.iter().cloned());
+                self.queues[i].extend(actions.iter().map(|a| (from, a.clone())));
             }
         }
     }

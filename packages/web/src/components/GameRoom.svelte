@@ -181,7 +181,7 @@
           // Own records are already logged at publish time.
           if (!fromSelf) addLog(`${nameFor(did)}: ${actionLabel(cbor)}`);
           try {
-            await _session.receiveAction(cbor, { fromSelf, seq });
+            await _session.receiveAction(cbor, { did, fromSelf, seq });
           } catch (e) {
             console.warn(`receiveAction(${did}@${seq}) failed:`, e?.message || e);
           }
@@ -256,13 +256,18 @@
       isOurTurn = true;
       availableActions = mapBetOptions(_session.betOptions);
       const ourChips = chipsByDid[session.did] ?? 0;
-      const minRaise = tableRecord?.smallBlind ? tableRecord.smallBlind * 2 : 2;
-      raiseContext = {
-        min: minRaise,
-        max: ourChips,
-        pot,
-        quickAmounts: buildQuickAmounts(pot, minRaise, ourChips),
-      };
+      // The minimum raise TOTAL comes from the engine's suggested Raise
+      // option (current bet + big blind). A fixed big-blind minimum here is
+      // how an under-raise below the standing bet once reached the engine.
+      const raiseOpt = availableActions.find((a) => a.type === "raise");
+      raiseContext = raiseOpt
+        ? {
+            min: raiseOpt.amount,
+            max: ourChips,
+            pot,
+            quickAmounts: buildQuickAmounts(pot, raiseOpt.amount, ourChips),
+          }
+        : null;
     } else {
       isOurTurn = false;
       availableActions = [];
