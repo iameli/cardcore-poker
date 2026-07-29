@@ -122,6 +122,40 @@ function dehydrateBytes(value) {
 }
 
 /**
+ * Compute a record's DASL CID string: CIDv1, dag-cbor codec, sha-256,
+ * base32-lower multibase — the same CID the PDS derives when it commits the
+ * record. `record` must be in data-model form (real Uint8Arrays, not
+ * `{ $bytes }` wrappers).
+ */
+export async function computeRecordCid(record) {
+  const body = dagCbor.encode(record);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
+  // <cidv1> <dag-cbor> <sha2-256> <32 bytes> || digest
+  const bytes = new Uint8Array(4 + digest.length);
+  bytes.set([0x01, 0x71, 0x12, 0x20]);
+  bytes.set(digest, 4);
+  return "b" + base32Lower(bytes);
+}
+
+/** RFC 4648 base32, lowercase, no padding (the multibase 'b' alphabet). */
+function base32Lower(bytes) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let out = "";
+  let bits = 0;
+  let value = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += alphabet[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/**
  * Publishes records to the player's PDS via the @atcute Client we already
  * built during signin.
  */
@@ -129,6 +163,40 @@ export class Publisher {
   constructor({ client, did }) {
     this.client = client;
     this.did = did;
+    // rkey → { uri, cid, value } of action records this repo has ALREADY
+    // published for the current table. Loaded once at session start so a
+    // resumed session can verify its re-derived history against the repo
+    // locally instead of re-publishing it. See loadPublishedActions().
+    this._published = new Map();
+  }
+
+  /**
+   * Snapshot this repo's existing action records for a table. Call once
+   * before the session starts publishing: occupied slots are then verified
+   * by CID comparison with zero HTTP requests, and only genuinely new
+   * actions hit the wire. Without the snapshot everything still works —
+   * occupied slots just fall through to the slower create-then-probe path.
+   */
+  async loadPublishedActions(tableTid) {
+    this._published = new Map();
+    const prefix = `${tableTid}-`;
+    let cursor;
+    do {
+      const params = { repo: this.did, collection: LEXICONS.ACTION, limit: 100 };
+      if (cursor) params.cursor = cursor;
+      const res = await this.client.get("com.atproto.repo.listRecords", { params });
+      if (!res.ok) {
+        throw new Error(`listRecords(${LEXICONS.ACTION}) failed: ${res.status}`);
+      }
+      for (const rec of res.data.records || []) {
+        const rkey = rec.uri.split("/").pop();
+        if (rkey.startsWith(prefix)) {
+          this._published.set(rkey, { uri: rec.uri, cid: rec.cid, value: rec.value });
+        }
+      }
+      cursor = res.data.records?.length ? res.data.cursor : undefined;
+    } while (cursor);
+    return this._published.size;
   }
 
   async createTable({ players, startingChips, smallBlind }) {
@@ -150,18 +218,47 @@ export class Publisher {
    * reconstitute the inner action object as the lexicon expects.
    */
   async publishAction({ tableRef, prevRef, seq, tableTid, actionCbor }) {
+    const rkey = rkeyForSeq(tableTid, seq);
+    const rawAction = dagCbor.decode(actionCbor);
+
+    // Slot already published by a previous session of ours (reload replay
+    // re-derives deterministic history)? Verify locally by CID and skip the
+    // wire entirely. createdAt is adopted from the published record — it's
+    // the one field a re-derivation legitimately can't reproduce.
+    const known = this._published.get(rkey);
+    if (known) {
+      const proposed = buildActionRecord({ tableRef, prevRef, seq, action: rawAction });
+      proposed.createdAt = known.value.createdAt;
+      const cid = await computeRecordCid(proposed);
+      if (cid === known.cid) {
+        return { uri: known.uri, cid: known.cid };
+      }
+      // A CID mismatch could still be an encoding subtlety rather than real
+      // divergence — fall back to a semantic compare before condemning it.
+      if (sameActionContent(known.value, dehydrateBytes(proposed))) {
+        console.warn(
+          `[publisher] ${rkey}: content matches but computed CID ${cid} != repo CID ${known.cid}`,
+        );
+        return { uri: known.uri, cid: known.cid };
+      }
+      throw new Error(
+        `refusing to overwrite ${LEXICONS.ACTION}/${rkey}: the record already on ` +
+          `the PDS differs from the locally replayed action — local state has ` +
+          `diverged from published history`,
+      );
+    }
+
     // Decode the WASM-emitted CBOR, then dehydrate Uint8Array fields to the
     // `{ $bytes: base64 }` JSON wire format the lexicon expects. Without this
     // step, @atcute's JSON.stringify turns Uint8Arrays into numeric-keyed
     // objects, which the Rust lexicon parser rejects on read.
-    const innerAction = dehydrateBytes(dagCbor.decode(actionCbor));
     const record = buildActionRecord({
       tableRef,
       prevRef,
       seq,
-      action: innerAction,
+      action: dehydrateBytes(rawAction),
     });
-    return this._createWithRkey(LEXICONS.ACTION, rkeyForSeq(tableTid, seq), record);
+    return this._createWithRkey(LEXICONS.ACTION, rkey, record);
   }
 
   async _createRecord(collection, record) {

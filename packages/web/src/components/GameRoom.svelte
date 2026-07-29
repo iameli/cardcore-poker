@@ -142,6 +142,20 @@
       const seed = isSpectator ? generateSeed() : restoreOrCreateSeed(tableUri);
       _publisher = new Publisher({ client: session.client, did: session.did });
 
+      // Snapshot our own already-published actions BEFORE the agent starts
+      // emitting: a resumed session re-derives its deterministic history, and
+      // the snapshot lets the publisher verify those re-derivations by CID
+      // locally (and skip the wire) instead of re-publishing every slot.
+      if (!isSpectator) {
+        try {
+          const n = await _publisher.loadPublishedActions(_tableTid);
+          if (n > 0) addLog(`Resuming — ${n} of our actions already published`);
+        } catch (e) {
+          // Non-fatal: occupied slots fall back to create-then-probe.
+          console.warn("loadPublishedActions failed:", e?.message || e);
+        }
+      }
+
       _session = new PlayerSession({
         did: session.did,
         seed,
