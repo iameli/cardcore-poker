@@ -61,9 +61,21 @@
     return Math.min(fitBoxW / DESIGN_W, fitBoxH / fitContentH, 2);
   });
 
-  // Pause between hands so players can read the showdown result before the
-  // next hand is dealt.
-  const NEXT_HAND_DELAY = 4000;
+  // Short pause between hands — the deal starts almost immediately, and the
+  // result banner (below) stays up on its own timer so there's still time to
+  // read what happened while the next hand is dealt underneath.
+  const NEXT_HAND_DELAY = 1000;
+  // How long the hand-result banner stays up. Dismissible early.
+  const HAND_BANNER_MS = 7000;
+
+  // Previous hand's result, shown as an overlay banner with a countdown while
+  // the next hand deals underneath: { key, title, lines, expiresAt }.
+  let handBanner = $state(null);
+  let _bannerNow = $state(0);
+  let _bannerTimer = null;
+  const bannerSecondsLeft = $derived(
+    handBanner ? Math.max(0, Math.ceil((handBanner.expiresAt - _bannerNow) / 1000)) : 0,
+  );
 
   let _publisher = null;
   let _session = null;
@@ -211,6 +223,7 @@
 
   onDestroy(() => {
     if (_advanceTimer) clearTimeout(_advanceTimer);
+    if (_bannerTimer) clearInterval(_bannerTimer);
     _firehose?.stop();
     _session?.destroy();
   });
@@ -292,6 +305,13 @@
   // Hand finished: log the result once, then either declare the game over or
   // schedule the next hand to start automatically.
   function handleHandComplete() {
+    // Replayed hands are history, not suspense: no banner, no readable pause.
+    // (A live boundary has at most one pending CommitSeed per peer; a backlog
+    // bigger than the roster means we're replaying.)
+    const catchingUp = isSpectator
+      ? _session.pendingCount > 0
+      : _session.pendingCount > playerDids.length;
+
     const result = _session.lastHandResult;
     if (result && result.hand_index > _loggedHandIndex) {
       _loggedHandIndex = result.hand_index;
@@ -304,6 +324,7 @@
         if (did) revealed[did] = s.cards.map(parseCard).filter(Boolean);
       }
       revealedByDid = revealed;
+      if (!catchingUp && !_session.gameOver) showHandBanner(result);
     }
 
     if (_session.gameOver) {
@@ -315,15 +336,49 @@
       return;
     }
 
-    // Auto-advance to the next hand after a readable pause. Anyone catching
-    // up on history skips the pause — those hands are replay, not suspense.
-    // (A live boundary has at most one pending CommitSeed per peer; a backlog
-    // bigger than the roster means we're replaying.)
+    // Auto-advance to the next hand quickly — the result banner stays up on
+    // its own longer timer, so readability doesn't depend on delaying the deal.
     if (!_advanceTimer) {
-      const catchingUp = isSpectator
-        ? _session.pendingCount > 0
-        : _session.pendingCount > playerDids.length;
       _advanceTimer = setTimeout(advanceHand, catchingUp ? 250 : NEXT_HAND_DELAY);
+    }
+  }
+
+  // Overlay the previous hand's result for HAND_BANNER_MS while the next hand
+  // is dealt underneath. Winners headline it; shown hands are the fine print.
+  function showHandBanner(result) {
+    const winners = [];
+    const lines = [];
+    for (const pot of result.pots || []) {
+      const names = pot.winners.map((w) => nameFor(playerDids[w])).join(", ");
+      if (!names) continue;
+      const how = result.by_fold ? "all others folded" : pot.hand_desc || "";
+      winners.push(`${names} wins ${pot.amount}${how ? ` — ${how}` : ""}`);
+    }
+    if (!result.by_fold) {
+      for (const s of result.shown || []) {
+        lines.push(`${nameFor(playerDids[s.seat])}: ${s.cards.join(" ")} — ${s.hand_desc}`);
+      }
+    }
+    handBanner = {
+      key: result.hand_index,
+      title: `Hand ${result.hand_index + 1}`,
+      winners,
+      lines,
+      expiresAt: Date.now() + HAND_BANNER_MS,
+    };
+    _bannerNow = Date.now();
+    if (_bannerTimer) clearInterval(_bannerTimer);
+    _bannerTimer = setInterval(() => {
+      _bannerNow = Date.now();
+      if (handBanner && _bannerNow >= handBanner.expiresAt) dismissHandBanner();
+    }, 250);
+  }
+
+  function dismissHandBanner() {
+    handBanner = null;
+    if (_bannerTimer) {
+      clearInterval(_bannerTimer);
+      _bannerTimer = null;
     }
   }
 
@@ -516,6 +571,31 @@
     </div>
   {/if}
 
+  {#if handBanner}
+    <!-- Previous hand's result, floating over the fresh deal. The next hand
+         is already being dealt underneath; this is purely for readability. -->
+    <div class="hand-banner" data-testid="hand-banner">
+      <div class="hand-banner-head">
+        <span class="hand-banner-title">{handBanner.title}</span>
+        <span class="hand-banner-count" data-testid="hand-banner-count">{bannerSecondsLeft}s</span>
+        <button
+          class="hand-banner-dismiss"
+          onclick={dismissHandBanner}
+          data-testid="hand-banner-dismiss"
+          title="Dismiss"
+        >
+          ✕
+        </button>
+      </div>
+      {#each handBanner.winners as w}
+        <div class="hand-banner-winner">🏆 {w}</div>
+      {/each}
+      {#each handBanner.lines as line}
+        <div class="hand-banner-line">{line}</div>
+      {/each}
+    </div>
+  {/if}
+
   <div class="main-area">
     <!-- Landscape: a static panel on the left of the game. Portrait: a sheet
          that slides up from the bottom, toggled by the Log button. -->
@@ -576,6 +656,7 @@
     display: flex;
     flex-direction: column;
     background: #ffffff;
+    position: relative; /* anchors the .hand-banner overlay */
   }
   header {
     display: flex;
@@ -668,6 +749,63 @@
     text-align: center;
     font-size: 0.55rem;
     letter-spacing: 1px;
+  }
+  /* Floats over the table so the next deal proceeds underneath. */
+  .hand-banner {
+    position: absolute;
+    top: 4.2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    min-width: 16rem;
+    max-width: 90vw;
+    background: #ffffff;
+    border: 3px solid #1a1a1a;
+    box-shadow: 4px 4px 0 #1a1a1a;
+    padding: 0.6rem 0.75rem;
+  }
+  .hand-banner-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+  .hand-banner-title {
+    font-size: 0.45rem;
+    letter-spacing: 2px;
+    color: #1a1a1a;
+  }
+  .hand-banner-count {
+    margin-left: auto;
+    font-size: 0.4rem;
+    color: #1a1a1a;
+    opacity: 0.5;
+  }
+  .hand-banner-dismiss {
+    font-family: inherit;
+    font-size: 0.45rem;
+    background: #ffffff;
+    color: #1a1a1a;
+    border: 2px solid #1a1a1a;
+    cursor: pointer;
+    padding: 0.1rem 0.3rem;
+    box-shadow: 2px 2px 0 #1a1a1a;
+  }
+  .hand-banner-dismiss:hover {
+    background: #c0392b;
+    color: #ffffff;
+    border-color: #c0392b;
+  }
+  .hand-banner-winner {
+    font-size: 0.5rem;
+    color: #1a7a3a;
+    padding: 0.15rem 0;
+  }
+  .hand-banner-line {
+    font-size: 0.42rem;
+    color: #1a1a1a;
+    opacity: 0.75;
+    padding: 0.1rem 0;
   }
   .loading {
     text-align: center;
