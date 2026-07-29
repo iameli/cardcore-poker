@@ -135,7 +135,7 @@ export class PlayerSession {
     // The agent reports actions XOR a bet prompt, so without re-polling we'd
     // never surface that bet and the table would stall.
     while (output.kind === "actions") {
-      // Serialize publishes so putRecord calls land on the PDS in seq order.
+      // Serialize publishes so records land on the PDS in seq order.
       for (let i = 0; i < output.action_count; i++) {
         const cbor = new Uint8Array(output.action(i));
         const mySeq = this.seq++;
