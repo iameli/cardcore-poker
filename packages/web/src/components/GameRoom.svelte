@@ -11,6 +11,8 @@
   import { LEXICONS } from "../lib/atproto-publisher.js";
   import { GAME_PHASES } from "../lib/poker-engine.js";
   import { resolveHandles } from "../lib/atproto.js";
+  import { getSetting, setSetting } from "../lib/settings.js";
+  import { playTurnCue } from "../lib/audio.js";
 
   let { session, tableUri, onLeaveRoom } = $props();
 
@@ -46,6 +48,15 @@
   let isSpectator = $state(false);
   // Portrait-mode game log sheet (slides up from the bottom).
   let logOpen = $state(false);
+  // Device-local settings (localStorage): sound cue when it's your turn.
+  let settingsOpen = $state(false);
+  let soundOnTurn = $state(getSetting("turnSound", true));
+  let _wasOurTurn = false;
+
+  function setSoundOnTurn(on) {
+    soundOnTurn = on;
+    setSetting("turnSound", on);
+  }
 
   // ─── Scale-to-fit ───────────────────────────────────────────────
   // The play area renders at a fixed design width and is uniformly scaled
@@ -302,6 +313,12 @@
     if (_session.isComplete) {
       handleHandComplete();
     }
+
+    // Audio cue on the rising edge of "it's your turn" — never on repeats.
+    if (_session.needsBet && !_wasOurTurn && soundOnTurn && !isSpectator) {
+      playTurnCue();
+    }
+    _wasOurTurn = _session.needsBet;
 
     if (_session.needsBet) {
       isOurTurn = true;
@@ -582,6 +599,30 @@
       <span class="copy-hint">{copied ? "✓ copied" : "copy"}</span>
     </button>
     <span class="phase-label" data-testid="phase">{gamePhase}</span>
+    <div class="settings-wrap">
+      <button
+        class="btn"
+        onclick={() => (settingsOpen = !settingsOpen)}
+        data-testid="settings-toggle"
+        title="Settings"
+      >
+        SET
+      </button>
+      {#if settingsOpen}
+        <div class="settings-menu" data-testid="settings-menu">
+          <label class="settings-item">
+            <input
+              type="checkbox"
+              data-testid="setting-turn-sound"
+              checked={soundOnTurn}
+              onchange={(e) => setSoundOnTurn(e.currentTarget.checked)}
+            />
+            sound when it's your turn
+          </label>
+          <div class="settings-note">settings are saved on this device only</div>
+        </div>
+      {/if}
+    </div>
     <button class="btn leave" onclick={leave}>Leave</button>
   </header>
 
@@ -758,6 +799,35 @@
   .leave:hover {
     background: #c0392b;
     color: #ffffff;
+  }
+  .settings-wrap {
+    position: relative;
+  }
+  .settings-menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    right: 0;
+    z-index: 40;
+    background: #ffffff;
+    border: 2px solid #1a1a1a;
+    box-shadow: 3px 3px 0 #1a1a1a;
+    padding: 0.5rem 0.75rem;
+    min-width: 11rem;
+  }
+  .settings-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.42rem;
+    color: #1a1a1a;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .settings-note {
+    margin-top: 0.4rem;
+    font-size: 0.35rem;
+    color: #1a1a1a;
+    opacity: 0.5;
   }
   .error-banner {
     background: #c0392b;
