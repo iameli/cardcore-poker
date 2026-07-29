@@ -58,6 +58,12 @@
     setSetting("turnSound", on);
   }
 
+  // Protocol violations: actions pushed to expected rkeys that can NEVER be
+  // valid (forged bets, short decks, duplicate commits…). Cheating, or a
+  // catastrophically broken client — either way the table deserves to know,
+  // loudly and permanently: [{did, seq, message}].
+  let violations = $state([]);
+
   // One-shot pre-action armed while it's NOT our turn, like online poker's
   // "Call 100" / "Call Any" checkboxes. Fires automatically when action
   // reaches us; a "call N" arm is dropped if the amount changed (a raise
@@ -224,6 +230,12 @@
               });
             },
         onUpdate: refreshUi,
+        onViolation: ({ did, seq, message }) => {
+          // Strip the machine prefix for humans; keep the reason.
+          const reason = message.replace(/^violation:\s*/, "");
+          violations = [...violations, { did, seq, message: reason }];
+          addLog(`⚠ INVALID ACTION from ${nameFor(did)} (seq ${seq}): ${reason}`);
+        },
       });
 
       // Feed the table to our local agent first — that moves it out of Init
@@ -661,6 +673,22 @@
     <div class="error-banner">{error}</div>
   {/if}
 
+  {#if violations.length}
+    <!-- Integrity alert: someone published an action that can never be valid.
+         Not dismissible — a table where cheating happened stays flagged. -->
+    <div class="violation-banner" data-testid="violation-banner">
+      <div class="violation-title">
+        ⚠ PROTOCOL VIOLATION{violations.length > 1 ? "S" : ""} DETECTED
+      </div>
+      {#each violations as v, i (i)}
+        <div class="violation-entry" data-testid="violation-entry">
+          {v.did === session?.did ? "You" : nameFor(v.did)} published an invalid action
+          {v.seq != null ? `(seq ${v.seq})` : ""}: {v.message}
+        </div>
+      {/each}
+    </div>
+  {/if}
+
   {#if gameOver}
     <div class="gameover-banner" data-testid="game-over">
       🏆 Game over — {winnerDid ? `${nameFor(winnerDid)} wins it all!` : "winner takes all"}
@@ -929,6 +957,22 @@
     padding: 0.5rem;
     text-align: center;
     font-size: 0.45rem;
+  }
+  .violation-banner {
+    background: #c0392b;
+    color: #ffffff;
+    border-bottom: 3px solid #1a1a1a;
+    padding: 0.5rem 1rem;
+  }
+  .violation-title {
+    font-size: 0.5rem;
+    letter-spacing: 2px;
+    margin-bottom: 0.3rem;
+  }
+  .violation-entry {
+    font-size: 0.42rem;
+    padding: 0.15rem 0;
+    opacity: 0.95;
   }
   .gameover-banner {
     background: #1a7a3a;

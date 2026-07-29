@@ -16,6 +16,15 @@
  */
 import { createAgent, parseCard } from "./cardcore-wasm.js";
 
+/**
+ * The wasm agent tags every receive error with a machine-readable prefix:
+ * "out-of-order: …" (buffer + retry) vs "violation: …" (terminal — the
+ * author published an action that can never be valid).
+ */
+function isViolation(e) {
+  return String(e?.message || e).startsWith("violation:");
+}
+
 export class PlayerSession {
   /**
    * @param {object} opts
@@ -23,12 +32,18 @@ export class PlayerSession {
    * @param {Uint8Array} opts.seed
    * @param {(args: {seq: number, cbor: Uint8Array}) => Promise<void>} opts.publishAction
    * @param {() => void} [opts.onUpdate]
+   * @param {(v: {did: string, seq: number|null, message: string}) => void} [opts.onViolation]
+   *   Called when a received action is a PROTOCOL VIOLATION — invalid in a
+   *   way no reordering can fix (forged bet, short deck, duplicate commit…).
+   *   The action is dropped, never retried. Distinct from out-of-order
+   *   actions, which buffer silently in the pending queue.
    */
-  constructor({ did, seed, publishAction, onUpdate }) {
+  constructor({ did, seed, publishAction, onUpdate, onViolation }) {
     this.did = did;
     this.agent = createAgent(did, seed);
     this.publishAction = publishAction;
     this.onUpdate = onUpdate || (() => {});
+    this.onViolation = onViolation || (() => {});
     this.seq = 0;
     this.publishing = Promise.resolve();
     this._needsBet = false;
@@ -74,6 +89,12 @@ export class PlayerSession {
       }
       await this._processOutput(out);
     } catch (e) {
+      if (isViolation(e)) {
+        // Terminal: no reordering can ever make this action valid. Drop it
+        // and tell the UI — the author pushed a forged/broken record.
+        this.onViolation({ did: author, seq, message: String(e?.message || e) });
+        return;
+      }
       // Not valid in our current phase yet (or not that player's turn yet) —
       // buffer and retry on the next successful transition rather than
       // dropping it (the firehose won't redeliver, so dropping would deadlock
@@ -121,8 +142,16 @@ export class PlayerSession {
           }
           await this._processOutput(out);
           progress = true;
-        } catch {
-          this._pending.push(item);
+        } catch (e) {
+          if (isViolation(e)) {
+            // The buffered action's moment came — and it turned out to be
+            // forged (e.g. an early-arriving bet that's an under-raise now
+            // that it's actually that player's turn). Drop it for good.
+            this.onViolation({ did: item.did, seq: item.seq, message: String(e?.message || e) });
+            progress = true;
+          } else {
+            this._pending.push(item);
+          }
         }
       }
     }

@@ -89,11 +89,25 @@ impl WasmAgent {
     /// Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
     /// the record came from. Attribution by author is what keeps replay
     /// deterministic; see PlayerAgent::receive_action.
+    ///
+    /// Errors carry a machine-readable prefix so the JS session layer can
+    /// tell the two failure classes apart:
+    ///   "out-of-order: …" — not valid YET (concurrent replay); buffer and
+    ///                       retry after the next successful apply.
+    ///   "violation: …"    — can NEVER be valid: the author published a
+    ///                       protocol-breaking action (cheating or a broken
+    ///                       client). Surface it; do not retry.
     pub fn receive_action(&mut self, cbor: &[u8], author_did: &str) -> Result<WasmOutput, JsValue> {
         self.inner
             .receive_action(cbor, author_did)
             .map(to_wasm_output)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(|e| {
+                let msg = match &e {
+                    crate::Error::OutOfOrder(m) => format!("out-of-order: {}", m),
+                    other => format!("violation: {}", other),
+                };
+                JsValue::from_str(&msg)
+            })
     }
 
     /// Submit a betting decision. action is one of: "fold", "check", "call", "allIn", or "raise:AMOUNT".

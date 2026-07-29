@@ -159,6 +159,14 @@ export class WasmAgent {
      * Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
      * the record came from. Attribution by author is what keeps replay
      * deterministic; see PlayerAgent::receive_action.
+     *
+     * Errors carry a machine-readable prefix so the JS session layer can
+     * tell the two failure classes apart:
+     *   "out-of-order: …" — not valid YET (concurrent replay); buffer and
+     *                       retry after the next successful apply.
+     *   "violation: …"    — can NEVER be valid: the author published a
+     *                       protocol-breaking action (cheating or a broken
+     *                       client). Surface it; do not retry.
      * @param {Uint8Array} cbor
      * @param {string} author_did
      * @returns {WasmOutput}

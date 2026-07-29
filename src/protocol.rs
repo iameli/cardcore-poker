@@ -258,9 +258,7 @@ impl ProtocolState {
             // --- Shuffle ---
             (Phase::Shuffle { next_player }, Action::ShuffleDeck { player_id, deck }) => {
                 if *player_id != *next_player {
-                    return Err(crate::Error::InvalidAction(
-                        "not your turn to shuffle".into(),
-                    ));
+                    return Err(crate::Error::OutOfOrder("not your turn to shuffle".into()));
                 }
                 if deck.len() != 52 {
                     return Err(crate::Error::InvalidAction(
@@ -287,7 +285,7 @@ impl ProtocolState {
             // --- Lock ---
             (Phase::Lock { next_player }, Action::LockDeck { player_id, deck }) => {
                 if *player_id != *next_player {
-                    return Err(crate::Error::InvalidAction("not your turn to lock".into()));
+                    return Err(crate::Error::OutOfOrder("not your turn to lock".into()));
                 }
                 if deck.len() != 52 {
                     return Err(crate::Error::InvalidAction(
@@ -322,7 +320,7 @@ impl ProtocolState {
                 },
             ) => {
                 if *action_pos != *deck_position {
-                    return Err(crate::Error::InvalidAction("wrong deck position".into()));
+                    return Err(crate::Error::OutOfOrder("wrong deck position".into()));
                 }
                 let exclude = match deal_type {
                     DealType::HoleCard { for_player, .. } => Some(*for_player),
@@ -365,7 +363,7 @@ impl ProtocolState {
             // --- Betting ---
             (Phase::Betting, Action::Bet { player_id, action }) => {
                 if self.game.action_on != Some(*player_id) {
-                    return Err(crate::Error::InvalidAction("not your turn to bet".into()));
+                    return Err(crate::Error::OutOfOrder("not your turn to bet".into()));
                 }
 
                 // Validate against the betting rules before mutating state. An
@@ -474,7 +472,7 @@ impl ProtocolState {
                 Ok(())
             }
 
-            _ => Err(crate::Error::InvalidAction(format!(
+            _ => Err(crate::Error::OutOfOrder(format!(
                 "action {:?} not valid in phase {:?}",
                 std::mem::discriminant(action),
                 self.phase
