@@ -83,10 +83,12 @@ test.describe("multiplayer (PDS-only)", () => {
     // DIDs should only be a fallback — A's table shows B by handle.
     await expect(a.page.getByText(handleB).first()).toBeVisible({ timeout: 15_000 });
 
-    // Noninteractive protocol steps are visible in the log too.
+    // Noninteractive protocol steps fold into groups — expand one to inspect.
+    await expect(a.page.getByTestId("log-fold").first()).toBeVisible();
+    await a.page.getByTestId("log-fold").first().click();
     await expect(
       a.page
-        .locator(".log-entry")
+        .getByTestId("log-protocol-entry")
         .filter({ hasText: /commitSeed/ })
         .first(),
     ).toBeVisible();
@@ -97,10 +99,19 @@ test.describe("multiplayer (PDS-only)", () => {
       await expect(page.getByTestId("phase")).toHaveText(/showdown/, { timeout: 30_000 });
     }
 
-    // The log anchors to the bottom as entries stream in… (shrink the window
-    // so the log is guaranteed to overflow its panel)
+    // The log anchors to the bottom as entries stream in… Shrink the window,
+    // then expand protocol folds (▸ = collapsed) until the log genuinely
+    // overflows — the anchor/scrollback UI only exists once it does.
     await a.page.setViewportSize({ width: 1100, height: 360 });
     const log = a.page.locator(".log-entries");
+    await expect
+      .poll(async () => {
+        for (const fold of await a.page.getByTestId("log-fold").filter({ hasText: "▸" }).all()) {
+          await fold.click().catch(() => {});
+        }
+        return log.evaluate((el) => el.scrollHeight > el.clientHeight + 20);
+      })
+      .toBe(true);
     await expect
       .poll(() => log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 10))
       .toBe(true);

@@ -37,13 +37,16 @@ test.describe("spectator (PDS-only)", () => {
     await expect(c.page.getByTestId("spectating")).toBeVisible({ timeout: 30_000 });
     await expect(c.page.getByTestId("phase")).toBeVisible();
 
-    // The spectator's log fills with replayed protocol actions.
+    // The spectator's log fills with replayed protocol actions, folded into
+    // groups — expand one to inspect.
+    await expect(c.page.getByTestId("log-fold").first()).toBeVisible({ timeout: 30_000 });
+    await c.page.getByTestId("log-fold").first().click();
     await expect(
       c.page
-        .locator(".log-entry")
+        .getByTestId("log-protocol-entry")
         .filter({ hasText: /commitSeed/ })
         .first(),
-    ).toBeVisible({ timeout: 30_000 });
+    ).toBeVisible();
 
     // A player acts; the spectator never gets action buttons.
     const a1 = a.page.getByRole("button", { name: ACTION_RX }).first();

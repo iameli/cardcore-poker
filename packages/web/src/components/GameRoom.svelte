@@ -85,9 +85,31 @@
   let _loggedHandIndex = -1;
   let _advanceTimer = null;
 
-  function addLog(msg) {
-    logEvents = [...logEvents, msg];
+  let _logId = 0;
+  // `protocol: true` marks noninteractive protocol steps (commits, shuffles,
+  // reveals). The log folds runs of them into collapsible groups — they'd
+  // otherwise drown out the human-readable story of the hand, but they must
+  // stay inspectable.
+  function addLog(msg, opts = {}) {
+    logEvents = [...logEvents, { id: _logId++, text: msg, protocol: !!opts.protocol }];
     if (logEvents.length > 80) logEvents = logEvents.slice(-80);
+  }
+
+  const PROTOCOL_KINDS = new Set([
+    "commitSeed",
+    "shuffleDeck",
+    "lockDeck",
+    "revealLockKey",
+    "verifySeed",
+  ]);
+
+  function isProtocolAction(cbor) {
+    try {
+      const kind = (dagCbor.decode(cbor).$type || "").split("#").pop();
+      return PROTOCOL_KINDS.has(kind);
+    } catch {
+      return false;
+    }
   }
 
   function tidFromUri(uri) {
@@ -174,7 +196,7 @@
         publishAction: isSpectator
           ? async () => {}
           : async ({ seq, cbor }) => {
-              addLog(`You: ${actionLabel(cbor)}`);
+              addLog(`You: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
               await _publisher.publishAction({
                 tableRef: { uri: tableUri, cid: _tableCid },
                 seq,
@@ -205,7 +227,9 @@
         onAction: async (did, seq, cbor) => {
           const fromSelf = did === session.did;
           // Own records are already logged at publish time.
-          if (!fromSelf) addLog(`${nameFor(did)}: ${actionLabel(cbor)}`);
+          if (!fromSelf) {
+            addLog(`${nameFor(did)}: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
+          }
           try {
             await _session.receiveAction(cbor, { did, fromSelf, seq });
           } catch (e) {

@@ -5,8 +5,35 @@
   // Pinned = following live: new entries auto-scroll into view. Scrolling up
   // unpins; the ↓ button re-pins.
   let pinned = $state(true);
+  // Expanded protocol groups, keyed by the id of the group's first entry —
+  // stable while new steps append to the group's tail.
+  let expanded = $state(new Set());
 
   const AT_BOTTOM_SLOP = 8; // px of wiggle room before we count as "scrolled up"
+
+  // Runs of noninteractive protocol steps (commits, shuffles, reveals) fold
+  // into a single collapsible row so the human story stays readable — but
+  // every step remains inspectable behind the fold.
+  const items = $derived.by(() => {
+    const out = [];
+    for (const ev of events) {
+      const last = out[out.length - 1];
+      if (ev.protocol) {
+        if (last?.type === "group") last.events.push(ev);
+        else out.push({ type: "group", key: `g${ev.id}`, events: [ev] });
+      } else {
+        out.push({ type: "entry", key: `e${ev.id}`, event: ev });
+      }
+    }
+    return out;
+  });
+
+  function toggleGroup(key) {
+    const next = new Set(expanded);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expanded = next;
+  }
 
   function onScroll() {
     if (!container) return;
@@ -24,6 +51,7 @@
   // unless the user is reading scrollback.
   $effect(() => {
     void events.length;
+    void expanded;
     if (pinned && container) {
       container.scrollTop = container.scrollHeight;
     }
@@ -36,10 +64,29 @@
     {#if events.length === 0}
       <div class="empty">Waiting for game to start...</div>
     {:else}
-      {#each events as event, i}
-        <div class="log-entry" class:fade={i < events.length - 4}>
-          {event}
-        </div>
+      {#each items as item, i (item.key)}
+        {#if item.type === "entry"}
+          <div class="log-entry" class:fade={i < items.length - 4}>
+            {item.event.text}
+          </div>
+        {:else}
+          <button
+            class="log-fold"
+            class:fade={i < items.length - 4}
+            data-testid="log-fold"
+            onclick={() => toggleGroup(item.key)}
+          >
+            {expanded.has(item.key) ? "▾" : "▸"}
+            {item.events.length} protocol step{item.events.length === 1 ? "" : "s"}
+          </button>
+          {#if expanded.has(item.key)}
+            {#each item.events as ev (ev.id)}
+              <div class="log-entry protocol" data-testid="log-protocol-entry">
+                {ev.text}
+              </div>
+            {/each}
+          {/if}
+        {/if}
       {/each}
     {/if}
   </div>
@@ -89,6 +136,30 @@
     border-radius: 0;
   }
   .log-entry.fade {
+    opacity: 0.4;
+  }
+  .log-entry.protocol {
+    opacity: 0.6;
+    padding-left: 0.8rem;
+  }
+  .log-fold {
+    font-family: inherit;
+    font-size: 0.42rem;
+    color: #1a1a1a;
+    opacity: 0.65;
+    padding: 2px 4px;
+    background: none;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    text-align: left;
+    letter-spacing: 1px;
+  }
+  .log-fold:hover {
+    opacity: 1;
+    color: #c0392b;
+  }
+  .log-fold.fade {
     opacity: 0.4;
   }
   .empty {
