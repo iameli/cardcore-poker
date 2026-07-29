@@ -58,6 +58,14 @@
     setSetting("turnSound", on);
   }
 
+  // One-shot pre-action armed while it's NOT our turn, like online poker's
+  // "Call 100" / "Call Any" checkboxes. Fires automatically when action
+  // reaches us; a "call N" arm is dropped if the amount changed (a raise
+  // behind us must never be called blind).
+  let preAction = $state(null); // null | {type:"call", amount} | {type:"callAny"}
+  let ourToCall = $state(0);
+  let ourFolded = $state(false);
+
   // ─── Scale-to-fit ───────────────────────────────────────────────
   // The play area renders at a fixed design width and is uniformly scaled
   // (transform) so the whole game always fits the viewport — no scrolling.
@@ -297,6 +305,12 @@
       betsByDid = bets;
       foldedByDid = folded;
       if (gs.actionOn != null) actionOnDid = playerDids[gs.actionOn];
+
+      ourToCall = Math.max(0, (gs.currentBet ?? 0) - (bets[session.did] ?? 0));
+      ourFolded = !!folded[session.did];
+      // A raise behind us invalidates a "call N" arm; folding clears any arm.
+      if (preAction?.type === "call" && ourToCall !== preAction.amount) preAction = null;
+      if (ourFolded) preAction = null;
     }
     holeCards = _session.holeCards;
     communityCards = _session.communityCards;
@@ -319,6 +333,21 @@
       playTurnCue();
     }
     _wasOurTurn = _session.needsBet;
+
+    // Armed pre-action: consume it now that action reached us. setTimeout
+    // breaks out of the onUpdate call stack — bet() must not re-enter the
+    // agent while it's mid-processing.
+    if (_session.needsBet && preAction && !isSpectator) {
+      const pre = preAction;
+      preAction = null;
+      const opts = mapBetOptions(_session.betOptions);
+      const canCall = opts.some((a) => a.type === "call");
+      const canCheck = opts.some((a) => a.type === "check");
+      let fire = null;
+      if (pre.type === "callAny") fire = canCall ? "call" : canCheck ? "check" : null;
+      else if (pre.type === "call" && canCall && ourToCall === pre.amount) fire = "call";
+      if (fire) setTimeout(() => handleAction({ type: fire }), 0);
+    }
 
     if (_session.needsBet) {
       isOurTurn = true;
@@ -352,6 +381,8 @@
     const catchingUp = isSpectator
       ? _session.pendingCount > 0
       : _session.pendingCount > playerDids.length;
+
+    preAction = null; // pre-actions never carry across a hand boundary
 
     const result = _session.lastHandResult;
     if (result && result.hand_index > _loggedHandIndex) {
@@ -702,6 +733,45 @@
                 {isOurTurn}
                 placeholder={waitingMsg}
               />
+              {#if !gameOver}
+                <!-- Pre-actions: act automatically the moment action reaches
+                     us. "Call N" only holds for that exact price. Hidden (but
+                     still occupying height — the bottom panel must not change
+                     size across turn changes or the scaled game jumps) when
+                     it's our turn or we're out of the hand. -->
+                <div
+                  class="preact-row"
+                  class:invisible={isOurTurn ||
+                    ourFolded ||
+                    phase === "Init" ||
+                    phase === "Complete"}
+                >
+                  {#if ourToCall > 0}
+                    <label class="preact">
+                      <input
+                        type="checkbox"
+                        data-testid="preact-call"
+                        checked={preAction?.type === "call"}
+                        onchange={(e) =>
+                          (preAction = e.currentTarget.checked
+                            ? { type: "call", amount: ourToCall }
+                            : null)}
+                      />
+                      CALL {ourToCall}
+                    </label>
+                  {/if}
+                  <label class="preact">
+                    <input
+                      type="checkbox"
+                      data-testid="preact-call-any"
+                      checked={preAction?.type === "callAny"}
+                      onchange={(e) =>
+                        (preAction = e.currentTarget.checked ? { type: "callAny" } : null)}
+                    />
+                    CALL ANY
+                  </label>
+                </div>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -828,6 +898,30 @@
     font-size: 0.35rem;
     color: #1a1a1a;
     opacity: 0.5;
+  }
+  .preact-row {
+    display: flex;
+    gap: 1.2rem;
+    justify-content: center;
+    padding: 0.1rem 0.75rem 0.25rem;
+    min-height: 0.9rem;
+  }
+  .preact-row.invisible {
+    visibility: hidden;
+  }
+  .preact {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.42rem;
+    color: #1a1a1a;
+    opacity: 0.75;
+    cursor: pointer;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  .preact:hover {
+    opacity: 1;
   }
   .error-banner {
     background: #c0392b;

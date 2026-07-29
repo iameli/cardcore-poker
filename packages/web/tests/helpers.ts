@@ -21,11 +21,11 @@ export async function readHandle(page: Page): Promise<string> {
 }
 
 /**
- * Drive the open-room flow end to end: `a` hosts a room, `b` opens its URL
- * and requests to join, `a` approves and starts. Resolves once both players
- * are in the GameRoom. Returns the table's AT URI.
+ * Drive the open-room flow end to end: `a` hosts a room, every other context
+ * opens its URL and requests to join, `a` approves each and starts. Resolves
+ * once all players are in the GameRoom. Returns the table's AT URI.
  */
-export async function startOpenRoomGame(a: Ctx, b: Ctx): Promise<string> {
+export async function startOpenRoomGame(a: Ctx, ...joiners: Ctx[]): Promise<string> {
   await a.page.getByTestId("create-open-room").click();
   await expect(a.page.getByTestId("copy-table-uri")).toBeVisible({ timeout: 15_000 });
   const tid = (await a.page.getByTestId("copy-table-uri").locator("code").innerText())
@@ -37,13 +37,20 @@ export async function startOpenRoomGame(a: Ctx, b: Ctx): Promise<string> {
   );
   const tableUri = `at://${didA}/re.cardco.poker.table/${tid}`;
 
-  await b.page.goto(`/${tableUri}`);
-  await b.page.getByTestId("request-join").click();
-  await expect(a.page.getByTestId("approve-request")).toBeVisible({ timeout: 30_000 });
-  await a.page.getByTestId("approve-request").click();
+  // Join + approve sequentially so the roster order (and therefore seating)
+  // is deterministic: host, then joiners in the order given.
+  for (let i = 0; i < joiners.length; i++) {
+    const j = joiners[i];
+    await j.page.goto(`/${tableUri}`);
+    await j.page.getByTestId("request-join").click();
+    await expect(a.page.getByTestId("approve-request").first()).toBeVisible({ timeout: 30_000 });
+    await a.page.getByTestId("approve-request").first().click();
+    await expect(a.page.getByTestId("approve-request")).toHaveCount(0);
+  }
   await expect(a.page.getByTestId("start-game")).toBeEnabled();
   await a.page.getByTestId("start-game").click();
-  await expect(a.page.getByTestId("phase")).toBeVisible({ timeout: 30_000 });
-  await expect(b.page.getByTestId("phase")).toBeVisible({ timeout: 30_000 });
+  for (const ctx of [a, ...joiners]) {
+    await expect(ctx.page.getByTestId("phase")).toBeVisible({ timeout: 30_000 });
+  }
   return tableUri;
 }
