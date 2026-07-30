@@ -315,6 +315,16 @@ export class Publisher {
     );
   }
 
+  /**
+   * A record from the loadPublishedActions() snapshot, or null. Lets the
+   * caller inspect what this repo already published at a seq slot — e.g. to
+   * verify a locally stored seed can actually reproduce the game's history
+   * before letting an agent participate.
+   */
+  publishedRecord(tableTid, seq) {
+    return this._published.get(rkeyForSeq(tableTid, seq)) || null;
+  }
+
   async _getOwnRecord(collection, rkey) {
     const res = await this.client.get("com.atproto.repo.getRecord", {
       params: { repo: this.did, collection, rkey },

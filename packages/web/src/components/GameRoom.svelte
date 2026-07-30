@@ -4,7 +4,7 @@
   import PokerTable from "./PokerTable.svelte";
   import ActionBar from "./ActionBar.svelte";
   import GameLog from "./GameLog.svelte";
-  import { initWasm, parseCard } from "../lib/cardcore-wasm.js";
+  import { initWasm, parseCard, createAgent } from "../lib/cardcore-wasm.js";
   import { PlayerSession, generateSeed } from "../lib/game-session.js";
   import { Publisher, fetchTableRecord } from "../lib/transport.js";
   import { FirehoseSubscriber } from "../lib/firehose.js";
@@ -46,6 +46,11 @@
   let gameOver = $state(false);
   let winnerDid = $state(null);
   let isSpectator = $state(false);
+  // We're in the roster, but this device doesn't hold the game's key
+  // material (the seed lives in localStorage on whatever device played it).
+  // Without the seed we can't reproduce our published actions — so we watch
+  // as a spectator instead of fabricating fresh keys and diverging.
+  let keyless = $state(false);
   // Portrait-mode game log sheet (slides up from the bottom).
   let logOpen = $state(false);
   // Device-local settings (localStorage): sound cue when it's your turn.
@@ -190,27 +195,62 @@
         })
         .catch(() => {});
 
-      // Spectators get a throwaway seed (their agent never emits, so there's
-      // nothing worth persisting) and a no-op publisher.
-      const seed = isSpectator ? generateSeed() : restoreOrCreateSeed(tableUri);
       _publisher = new Publisher({ client: session.client, did: session.did });
 
+      // getRecord strips $type; add it back for the lexicon.
+      const tableForCbor = { $type: LEXICONS.TABLE, ...record };
+      const tableCbor = dagCbor.encode(tableForCbor);
+
+      // Seed selection — the load-bearing step for multi-device identity.
       // Snapshot our own already-published actions BEFORE the agent starts
       // emitting: a resumed session re-derives its deterministic history, and
       // the snapshot lets the publisher verify those re-derivations by CID
       // locally (and skip the wire) instead of re-publishing every slot.
-      if (!isSpectator) {
+      //
+      // If we've already published actions for this table, this device must
+      // hold the seed that PRODUCED them. A missing or mismatched seed (the
+      // game was played on another computer) means we cannot participate —
+      // fabricating a fresh seed would emit actions that diverge from our own
+      // published history. Verify the stored seed reproduces our published
+      // seq-0 commitSeed; otherwise become a spectator.
+      let seed;
+      if (isSpectator) {
+        // True spectators get a throwaway seed — their agent never emits.
+        seed = generateSeed();
+      } else {
+        const stored = loadStoredSeed(tableUri);
+        let publishedCount = 0;
         try {
-          const n = await _publisher.loadPublishedActions(_tableTid);
-          if (n > 0) addLog(`Resuming — ${n} of our actions already published`);
+          publishedCount = await _publisher.loadPublishedActions(_tableTid);
         } catch (e) {
           // Non-fatal: occupied slots fall back to create-then-probe.
           console.warn("loadPublishedActions failed:", e?.message || e);
         }
+        if (publishedCount > 0) {
+          const seq0 = _publisher.publishedRecord(_tableTid, 0);
+          if (stored && seq0 && seedReproducesCommit(stored, tableCbor, seq0.value)) {
+            seed = stored;
+            addLog(`Resuming — ${publishedCount} of our actions already published`);
+          } else {
+            isSpectator = true;
+            keyless = true;
+            seed = generateSeed();
+            addLog(
+              "⚠ This game's key material isn't on this device — " +
+                "watching as a spectator. To play, use the device you started on.",
+            );
+          }
+        } else {
+          seed = stored ?? createAndStoreSeed(tableUri);
+        }
       }
 
       _session = new PlayerSession({
-        did: session.did,
+        // A keyless viewer's DID is in the roster, but its agent must NOT
+        // take the seat — a seated agent auto-emits crypto derived from the
+        // (throwaway) seed and its self-records would shadow the real ones.
+        // A non-roster DID makes the agent a pure replay observer.
+        did: isSpectator ? "did:cardcore:viewer" : session.did,
         seed,
         publishAction: isSpectator
           ? async () => {}
@@ -229,9 +269,7 @@
       // Feed the table to our local agent first — that moves it out of Init
       // and into the CommitSeeds phase, so the firehose backfill (which may
       // include peer CommitSeeds already on disk) won't be rejected as
-      // out-of-phase. getRecord strips $type; add it back for the lexicon.
-      const tableForCbor = { $type: LEXICONS.TABLE, ...record };
-      const tableCbor = dagCbor.encode(tableForCbor);
+      // out-of-phase.
       addLog(isSpectator ? "Watching table…" : "Joining table…");
       await _session.receiveTable(tableCbor);
 
@@ -244,7 +282,10 @@
         tableUri,
         ownPdsUri: session.pdsUri,
         onAction: async (did, seq, cbor) => {
-          const fromSelf = did === session.did;
+          // A keyless viewer's own past records are REPLAY input, not echo:
+          // the viewer agent never emitted them, so they must apply like any
+          // peer's. fromSelf semantics only exist for a seated session.
+          const fromSelf = !isSpectator && did === session.did;
           // Own records are already logged at publish time.
           if (!fromSelf) {
             addLog(`${nameFor(did)}: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
@@ -273,16 +314,50 @@
 
   // ─── Helpers ──────────────────────────────────────────────────────
 
-  function restoreOrCreateSeed(uri) {
-    const key = `cardcore_seed:${uri}`;
-    const stored = localStorage.getItem(key);
+  function loadStoredSeed(uri) {
+    const stored = localStorage.getItem(`cardcore_seed:${uri}`);
     if (stored) {
       const arr = stored.split(",").map(Number);
       if (arr.length === 32) return new Uint8Array(arr);
     }
+    return null;
+  }
+
+  function createAndStoreSeed(uri) {
     const seed = generateSeed();
-    localStorage.setItem(key, Array.from(seed).join(","));
+    localStorage.setItem(`cardcore_seed:${uri}`, Array.from(seed).join(","));
     return seed;
+  }
+
+  /**
+   * Whether `seed` is the key material this game was actually played with:
+   * a throwaway agent is given the seed and the table, and the commitSeed it
+   * derives must match the one we PUBLISHED at seq 0. Anything else means the
+   * seed can't reproduce our own history and must not be allowed to play.
+   */
+  function seedReproducesCommit(seed, tableCbor, publishedValue) {
+    let probe = null;
+    try {
+      probe = createAgent(session.did, seed);
+      const out = probe.receive_table(tableCbor);
+      if (out.kind !== "actions" || out.action_count < 1) return false;
+      const derived = dagCbor.decode(new Uint8Array(out.action(0)));
+      const pub = publishedValue?.action;
+      if (!pub || !String(pub.$type || "").endsWith("commitSeed")) return false;
+      if (!derived?.commitment) return false;
+      let bin = "";
+      for (const byte of derived.commitment) bin += String.fromCharCode(byte);
+      // The PDS serves $bytes unpadded; btoa pads — normalize both.
+      const derB64 = btoa(bin).replace(/=+$/, "");
+      const pubB64 = String(pub.commitment?.$bytes || "").replace(/=+$/, "");
+      return derB64 === pubB64;
+    } catch {
+      return false;
+    } finally {
+      try {
+        probe?.free();
+      } catch {}
+    }
   }
 
   function refreshUi() {
@@ -723,7 +798,14 @@
           <div class="bottom-panel">
             {#if isSpectator}
               <div class="spectating" data-testid="spectating">
-                👁 Spectating{waitingMsg ? ` — ${waitingMsg}` : ""}
+                {#if keyless}
+                  <span data-testid="keyless-note">
+                    👁 Watching only — this game's keys aren't on this device. To play, use the
+                    device you started on.
+                  </span>
+                {:else}
+                  👁 Spectating{waitingMsg ? ` — ${waitingMsg}` : ""}
+                {/if}
               </div>
             {:else}
               <ActionBar
