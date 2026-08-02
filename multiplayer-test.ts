@@ -121,6 +121,9 @@ async function main() {
   // Subscribe to firehose FIRST, then write initial actions
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
+      for (const p of players) {
+        console.error(`  stuck: ${p.did.slice(-8)} phase=${p.wasmAgent.phase()}`);
+      }
       ws.close();
       reject(new Error("timeout"));
     }, 120000);
@@ -176,7 +179,7 @@ async function main() {
             for (const p of players) {
               if (p.did === frame.repo) continue;
               try {
-                let out = p.wasmAgent.receive_action(new Uint8Array(cbor));
+                let out = p.wasmAgent.receive_action(new Uint8Array(cbor), frame.repo);
                 await writeActions(p, out, players[0].did);
 
                 // Drain auto-responses and bets
