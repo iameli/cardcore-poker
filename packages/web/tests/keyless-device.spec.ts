@@ -44,7 +44,25 @@ test.describe("keyless device", () => {
       );
       return (await res.json()).records.length;
     };
-    const before = await recordCount();
+
+    // Halt the live game before taking the baseline: the original tabs
+    // auto-advance into hand 2 and keep publishing protocol records, which
+    // would race the "wrote NOTHING" assertions below. With both contexts
+    // closed, the only device that could still write is the keyless one.
+    await a.ctx.close();
+    await b.ctx.close();
+    let before = await recordCount();
+    await expect
+      .poll(
+        async () => {
+          const now = await recordCount();
+          const stable = now === before;
+          before = now;
+          return stable;
+        },
+        { timeout: 15_000, intervals: [500] },
+      )
+      .toBe(true);
 
     const laptop = await freshContext(browser);
     await laptop.page.addInitScript((s: string) => {
@@ -85,8 +103,6 @@ test.describe("keyless device", () => {
     await expect(laptop2.page.getByTestId("keyless-note")).toBeVisible({ timeout: 30_000 });
     expect(await recordCount()).toBe(before);
 
-    await a.ctx.close();
-    await b.ctx.close();
     await laptop.ctx.close();
     await laptop2.ctx.close();
   });
