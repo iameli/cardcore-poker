@@ -29,6 +29,10 @@ export class WasmAgent {
      */
     hole_cards(): string;
     /**
+     * Whether chained (settlement) driving is enabled.
+     */
+    is_chained(): boolean;
+    /**
      * JSON of the most recently completed hand's result, or "" if none yet.
      */
     last_hand_result(): string;
@@ -36,6 +40,13 @@ export class WasmAgent {
      * Create a new agent with a DID and secret seed.
      */
     constructor(did: string, seed: Uint8Array);
+    /**
+     * JSON of the next action in the canonical global order, or "null" when the
+     * chain is complete (all seeds verified). Example:
+     * `{"seat":1,"kind":"shuffleDeck","mine":true}`. `revealLockKey` entries
+     * carry `deckPosition`; `bet` entries carry the available `options`.
+     */
+    next_action(): string;
     /**
      * Advance to the next hand (call after the current hand is Complete and the
      * game isn't over). Returns this player's actions for the new hand.
@@ -47,6 +58,16 @@ export class WasmAgent {
      */
     phase(): string;
     /**
+     * Build (without applying) this seat's betting action. `action` is one of:
+     * "fold", "check", "call", "allIn", or "raise:AMOUNT".
+     */
+    produce_bet(action: string): Uint8Array;
+    /**
+     * Build (without applying) this seat's next non-interactive action for the
+     * current canonical turn. Empty when it is not our turn or a bet is needed.
+     */
+    produce_next(): Uint8Array;
+    /**
      * Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
      * the record came from. Attribution by author is what keeps replay
      * deterministic; see PlayerAgent::receive_action.
@@ -56,6 +77,13 @@ export class WasmAgent {
      * Feed a DAG-CBOR table record. Returns actions to emit.
      */
     receive_table(cbor: Uint8Array): WasmOutput;
+    /**
+     * Enable or disable chained (settlement) driving. In chained mode the
+     * agent never auto-emits; the caller drives one globally ordered action
+     * chain via `next_action`, `produce_next`, and `produce_bet`, feeding every
+     * action back through `receive_action`. Set this before `receive_table`.
+     */
+    set_chained(on: boolean): void;
     /**
      * JSON list of pending protocol steps and the seats that owe them:
      * `[{"kind":"shuffleDeck","seats":[1]}, ...]` (revealLockKey entries also
@@ -104,12 +132,17 @@ export interface InitOutput {
     readonly wasmagent_game_over: (a: number) => number;
     readonly wasmagent_game_state: (a: number) => [number, number];
     readonly wasmagent_hole_cards: (a: number) => [number, number];
+    readonly wasmagent_is_chained: (a: number) => number;
     readonly wasmagent_last_hand_result: (a: number) => [number, number];
     readonly wasmagent_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmagent_next_action: (a: number) => [number, number];
     readonly wasmagent_next_hand: (a: number) => [number, number, number];
     readonly wasmagent_phase: (a: number) => [number, number];
+    readonly wasmagent_produce_bet: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly wasmagent_produce_next: (a: number) => [number, number, number, number];
     readonly wasmagent_receive_action: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly wasmagent_receive_table: (a: number, b: number, c: number) => [number, number, number];
+    readonly wasmagent_set_chained: (a: number, b: number) => void;
     readonly wasmagent_waiting_on: (a: number) => [number, number];
     readonly wasmoutput_action: (a: number, b: number) => [number, number];
     readonly wasmoutput_action_count: (a: number) => number;

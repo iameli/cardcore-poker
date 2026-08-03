@@ -93,6 +93,14 @@ export class WasmAgent {
         }
     }
     /**
+     * Whether chained (settlement) driving is enabled.
+     * @returns {boolean}
+     */
+    is_chained() {
+        const ret = wasm.wasmagent_is_chained(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * JSON of the most recently completed hand's result, or "" if none yet.
      * @returns {string}
      */
@@ -127,6 +135,25 @@ export class WasmAgent {
         return this;
     }
     /**
+     * JSON of the next action in the canonical global order, or "null" when the
+     * chain is complete (all seeds verified). Example:
+     * `{"seat":1,"kind":"shuffleDeck","mine":true}`. `revealLockKey` entries
+     * carry `deckPosition`; `bet` entries carry the available `options`.
+     * @returns {string}
+     */
+    next_action() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmagent_next_action(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Advance to the next hand (call after the current hand is Complete and the
      * game isn't over). Returns this player's actions for the new hand.
      * @returns {WasmOutput}
@@ -154,6 +181,37 @@ export class WasmAgent {
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
+    }
+    /**
+     * Build (without applying) this seat's betting action. `action` is one of:
+     * "fold", "check", "call", "allIn", or "raise:AMOUNT".
+     * @param {string} action
+     * @returns {Uint8Array}
+     */
+    produce_bet(action) {
+        const ptr0 = passStringToWasm0(action, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmagent_produce_bet(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * Build (without applying) this seat's next non-interactive action for the
+     * current canonical turn. Empty when it is not our turn or a bet is needed.
+     * @returns {Uint8Array}
+     */
+    produce_next() {
+        const ret = wasm.wasmagent_produce_next(this.__wbg_ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
     }
     /**
      * Feed a DAG-CBOR action authored by `author_did` — the DID of the repo
@@ -187,6 +245,16 @@ export class WasmAgent {
             throw takeFromExternrefTable0(ret[1]);
         }
         return WasmOutput.__wrap(ret[0]);
+    }
+    /**
+     * Enable or disable chained (settlement) driving. In chained mode the
+     * agent never auto-emits; the caller drives one globally ordered action
+     * chain via `next_action`, `produce_next`, and `produce_bet`, feeding every
+     * action back through `receive_action`. Set this before `receive_table`.
+     * @param {boolean} on
+     */
+    set_chained(on) {
+        wasm.wasmagent_set_chained(this.__wbg_ptr, on);
     }
     /**
      * JSON list of pending protocol steps and the seats that owe them:

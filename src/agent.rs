@@ -44,6 +44,16 @@ pub struct PlayerAgent {
     table_tid: Option<String>,
     /// Which hand we're playing — must track protocol.hand_index for key derivation.
     hand_index: u64,
+    /// Chained (settlement) mode. When true the agent stops eagerly emitting and
+    /// applying its own actions. Instead the caller drives one bounded, globally
+    /// ordered action chain: it asks `next_action()` who acts next in the
+    /// canonical `valid_actions()[0]` order, calls `produce_next()` /
+    /// `produce_bet()` to build (but NOT apply) this seat's action, publishes it
+    /// with an explicit `prev`/global `seq`, and feeds every action — its own and
+    /// peers' — back through `receive_action` in chain order. This is what makes
+    /// a paid hand settlement-valid: a single contiguous chain that ends with
+    /// every seat's `VerifySeed`, exactly like the offline transcript generator.
+    chained: bool,
 }
 
 impl PlayerAgent {
@@ -64,7 +74,21 @@ impl PlayerAgent {
             seq: 0,
             table_tid: None,
             hand_index: 0,
+            chained: false,
         })
+    }
+
+    /// Turn chained (settlement) driving on or off. In chained mode the agent
+    /// never auto-emits: the caller drives one globally ordered chain via
+    /// `next_action()` + `produce_next()`/`produce_bet()` and feeds every action
+    /// back through `receive_action`. Must be set before the table is received.
+    pub fn set_chained(&mut self, on: bool) {
+        self.chained = on;
+    }
+
+    /// Whether chained (settlement) driving is enabled.
+    pub fn is_chained(&self) -> bool {
+        self.chained
     }
 
     /// Seed for the current hand, derived from the master seed and hand index.
@@ -194,6 +218,213 @@ impl PlayerAgent {
         let more = self.auto_respond_collect()?;
         emitted.extend(more);
         Ok(AgentOutput::Actions(emitted))
+    }
+
+    // --- Chained (settlement) driving ---------------------------------------
+    //
+    // These mirror the offline transcript generator: the canonical global order
+    // is always `state.valid_actions()[0]`. Every agent that has applied the
+    // same chain prefix computes the same next action, so N independent repos
+    // build one contiguous chain that ends with every seat's VerifySeed.
+
+    /// JSON describing the next action in the canonical global order, or
+    /// `"null"` when nothing is pending (all seeds verified → chain complete):
+    /// `{"seat":1,"kind":"shuffleDeck","mine":true}`. Bet entries also carry
+    /// `deckPosition` (for revealLockKey) and `options` (for bet).
+    pub fn next_action_json(&self) -> String {
+        let valid = self.state.valid_actions();
+        let Some(va) = valid.first() else {
+            return "null".to_string();
+        };
+        let (kind, pos) = valid_kind_name(&va.kind);
+        let mut value = serde_json::json!({
+            "seat": va.player_id,
+            "kind": kind,
+            "mine": Some(va.player_id) == self.seat,
+        });
+        if let Some(position) = pos {
+            value["deckPosition"] = position.into();
+        }
+        if let ValidActionKind::Bet { options } = &va.kind {
+            value["options"] =
+                serde_json::to_value(options).unwrap_or(serde_json::Value::Array(Vec::new()));
+        }
+        serde_json::to_string(&value).unwrap_or_else(|_| "null".into())
+    }
+
+    /// Build (but do NOT apply) this seat's next canonical action when the
+    /// global order is on us and the action is non-interactive (commit, shuffle,
+    /// lock, reveal, or seed verification). Returns an empty vector when it is
+    /// not our turn or the next action needs a betting decision (use
+    /// `produce_bet`). The caller publishes the returned CBOR with an explicit
+    /// `prev`/`seq`, then feeds it back through `receive_action` to apply it.
+    pub fn produce_next(&mut self) -> crate::Result<Vec<u8>> {
+        let seat = match self.seat {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+        let valid = self.state.valid_actions();
+        let Some(va) = valid.first() else {
+            return Ok(Vec::new());
+        };
+        if va.player_id != seat {
+            return Ok(Vec::new());
+        }
+        let kind = va.kind.clone();
+        if matches!(kind, ValidActionKind::Bet { .. }) {
+            return Ok(Vec::new());
+        }
+        let (_action, cbor) = self.build_action(seat, &kind)?;
+        Ok(cbor)
+    }
+
+    /// Build (but do NOT apply) this seat's betting action for the current
+    /// canonical turn. Mirrors `bet()` without touching state; the caller
+    /// publishes the CBOR and feeds it back through `receive_action`.
+    pub fn produce_bet(&mut self, action: BetAction) -> crate::Result<Vec<u8>> {
+        let amount = match &action {
+            BetAction::Raise(amt) => Some(*amt as i64),
+            _ => None,
+        };
+        let lex_bet = Bet {
+            action: bet_action_to_lex(&action),
+            amount,
+            extra_data: None,
+        };
+        self.encode_action_union(&ActionAction::Bet(Box::new(lex_bet)))
+    }
+
+    /// Construct the internal action and its DAG-CBOR payload for `seat`'s
+    /// `kind` without applying it to protocol state. Shared by the eager
+    /// (auto-emit) path and the chained (produce-without-apply) path so both
+    /// produce byte-identical records. Lock-key generation mutates `self.keys`
+    /// as a side effect — this is deterministic from the per-hand seed and the
+    /// current deck, and idempotent across retries.
+    fn build_action(
+        &mut self,
+        seat: usize,
+        kind: &ValidActionKind,
+    ) -> crate::Result<(Action, Vec<u8>)> {
+        match kind {
+            ValidActionKind::CommitSeed => {
+                let commitment = crypto::blake2b(&self.per_hand_seed()?)?;
+                let action = Action::CommitSeed {
+                    player_id: seat,
+                    commitment,
+                };
+                let cbor = self.encode_action_union(&ActionAction::CommitSeed(Box::new(
+                    CommitSeed {
+                        commitment: Bytes::copy_from_slice(&commitment),
+                        extra_data: None,
+                    },
+                )))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::ShuffleDeck => {
+                let mut encrypted = self.keys.encrypt_deck(&self.state.game.deck)?;
+                let phs = self.per_hand_seed()?;
+                let mut rng = PlayerRng::new(&phs, b"shuffle_permutation")?;
+                encrypted.shuffle(rng.as_rng());
+                let deck_bytes: Vec<Bytes> = encrypted
+                    .iter()
+                    .map(|p| Bytes::copy_from_slice(&p.0))
+                    .collect();
+                let action = Action::ShuffleDeck {
+                    player_id: seat,
+                    deck: encrypted,
+                };
+                let cbor = self.encode_action_union(&ActionAction::ShuffleDeck(Box::new(
+                    ShuffleDeck {
+                        deck: deck_bytes,
+                        extra_data: None,
+                    },
+                )))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::LockDeck => {
+                let deck_hash =
+                    crypto::blake2b(&serde_json::to_vec(&self.state.game.deck).unwrap())?;
+                let mut context = b"lock:".to_vec();
+                context.extend_from_slice(&deck_hash);
+                let phs = self.per_hand_seed()?;
+                let mut rng = PlayerRng::new(&phs, &context)?;
+                self.keys.generate_lock_keys(52, &mut rng)?;
+                let locked = self.keys.lock_deck(&self.state.game.deck)?;
+                let deck_bytes: Vec<Bytes> = locked
+                    .iter()
+                    .map(|p| Bytes::copy_from_slice(&p.0))
+                    .collect();
+                let action = Action::LockDeck {
+                    player_id: seat,
+                    deck: locked,
+                };
+                let cbor = self.encode_action_union(&ActionAction::LockDeck(Box::new(LockDeck {
+                    deck: deck_bytes,
+                    extra_data: None,
+                })))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::RevealLockKey { deck_position } => {
+                let pos = *deck_position;
+                let scalar = self.keys.lock_decrypt[pos].clone();
+                let action = Action::RevealLockKey {
+                    player_id: seat,
+                    deck_position: pos,
+                    scalar: scalar.clone(),
+                };
+                let cbor = self.encode_action_union(&ActionAction::RevealLockKey(Box::new(
+                    RevealLockKey {
+                        deck_position: pos as i64,
+                        scalar: Bytes::copy_from_slice(&scalar.0),
+                        extra_data: None,
+                    },
+                )))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::RevealHand => {
+                let positions = &self.state.hole_card_positions[seat];
+                let scalars: Vec<(usize, Scalar)> = positions
+                    .iter()
+                    .map(|pos| (*pos, self.keys.lock_decrypt[*pos].clone()))
+                    .collect();
+                let reveals: Vec<PositionScalar> = scalars
+                    .iter()
+                    .map(|(pos, s)| PositionScalar {
+                        deck_position: *pos as i64,
+                        scalar: Bytes::copy_from_slice(&s.0),
+                        extra_data: None,
+                    })
+                    .collect();
+                let action = Action::RevealHand {
+                    player_id: seat,
+                    scalars,
+                };
+                let cbor = self.encode_action_union(&ActionAction::RevealHand(Box::new(
+                    RevealHand {
+                        reveals,
+                        extra_data: None,
+                    },
+                )))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::VerifySeed => {
+                let seed = self.per_hand_seed()?;
+                let action = Action::VerifySeed {
+                    player_id: seat,
+                    seed: seed.clone(),
+                };
+                let cbor = self.encode_action_union(&ActionAction::VerifySeed(Box::new(
+                    VerifySeed {
+                        seed: Bytes::copy_from_slice(&seed),
+                        extra_data: None,
+                    },
+                )))?;
+                Ok((action, cbor))
+            }
+            ValidActionKind::Bet { .. } => Err(crate::Error::Protocol(
+                "build_action cannot construct a bet; use produce_bet".into(),
+            )),
+        }
     }
 
     /// Get this player's resolved hole cards (after dealing).
@@ -341,6 +572,11 @@ impl PlayerAgent {
 
     /// Collect all non-interactive actions this player should emit.
     fn auto_respond_collect(&mut self) -> crate::Result<Vec<Vec<u8>>> {
+        // Chained mode drives every action explicitly through the caller so a
+        // single globally ordered chain can be built. Never auto-emit here.
+        if self.chained {
+            return Ok(Vec::new());
+        }
         let mut emitted = Vec::new();
         loop {
             let valid = self.state.valid_actions();
@@ -364,132 +600,12 @@ impl PlayerAgent {
                 None => break,
             };
 
-            match &va.kind {
-                ValidActionKind::CommitSeed => {
-                    let commitment = crypto::blake2b(&self.per_hand_seed()?)?;
-                    self.state.apply(&Action::CommitSeed {
-                        player_id: seat,
-                        commitment,
-                    })?;
-                    emitted.push(self.encode_action_union(&ActionAction::CommitSeed(Box::new(
-                        CommitSeed {
-                            commitment: Bytes::copy_from_slice(&commitment),
-                            extra_data: None,
-                        },
-                    )))?);
-                    self.seq += 1;
-                }
-                ValidActionKind::ShuffleDeck => {
-                    let mut encrypted = self.keys.encrypt_deck(&self.state.game.deck)?;
-                    let phs = self.per_hand_seed()?;
-                    let mut rng = PlayerRng::new(&phs, b"shuffle_permutation")?;
-                    encrypted.shuffle(rng.as_rng());
-
-                    let deck_bytes: Vec<Bytes> = encrypted
-                        .iter()
-                        .map(|p| Bytes::copy_from_slice(&p.0))
-                        .collect();
-
-                    self.state.apply(&Action::ShuffleDeck {
-                        player_id: seat,
-                        deck: encrypted,
-                    })?;
-
-                    emitted.push(self.encode_action_union(&ActionAction::ShuffleDeck(
-                        Box::new(ShuffleDeck {
-                            deck: deck_bytes,
-                            extra_data: None,
-                        }),
-                    ))?);
-                    self.seq += 1;
-                }
-                ValidActionKind::LockDeck => {
-                    let deck_hash =
-                        crypto::blake2b(&serde_json::to_vec(&self.state.game.deck).unwrap())?;
-                    let mut context = b"lock:".to_vec();
-                    context.extend_from_slice(&deck_hash);
-                    let phs = self.per_hand_seed()?;
-                    let mut rng = PlayerRng::new(&phs, &context)?;
-                    self.keys.generate_lock_keys(52, &mut rng)?;
-                    let locked = self.keys.lock_deck(&self.state.game.deck)?;
-
-                    let deck_bytes: Vec<Bytes> = locked
-                        .iter()
-                        .map(|p| Bytes::copy_from_slice(&p.0))
-                        .collect();
-
-                    self.state.apply(&Action::LockDeck {
-                        player_id: seat,
-                        deck: locked,
-                    })?;
-
-                    emitted.push(self.encode_action_union(&ActionAction::LockDeck(Box::new(
-                        LockDeck {
-                            deck: deck_bytes,
-                            extra_data: None,
-                        },
-                    )))?);
-                    self.seq += 1;
-                }
-                ValidActionKind::RevealLockKey { deck_position } => {
-                    let pos = *deck_position;
-                    let scalar = self.keys.lock_decrypt[pos].clone();
-
-                    self.state.apply(&Action::RevealLockKey {
-                        player_id: seat,
-                        deck_position: pos,
-                        scalar: scalar.clone(),
-                    })?;
-
-                    emitted.push(self.encode_action_union(&ActionAction::RevealLockKey(
-                        Box::new(RevealLockKey {
-                            deck_position: pos as i64,
-                            scalar: Bytes::copy_from_slice(&scalar.0),
-                            extra_data: None,
-                        }),
-                    ))?);
-                    self.seq += 1;
-                }
-                ValidActionKind::RevealHand => {
-                    let positions = &self.state.hole_card_positions[seat];
-                    let scalars: Vec<(usize, Scalar)> = positions
-                        .iter()
-                        .map(|pos| (*pos, self.keys.lock_decrypt[*pos].clone()))
-                        .collect();
-
-                    let reveals: Vec<PositionScalar> = scalars
-                        .iter()
-                        .map(|(pos, s)| PositionScalar {
-                            deck_position: *pos as i64,
-                            scalar: Bytes::copy_from_slice(&s.0),
-                            extra_data: None,
-                        })
-                        .collect();
-
-                    self.state.apply(&Action::RevealHand {
-                        player_id: seat,
-                        scalars,
-                    })?;
-
-                    emitted.push(self.encode_action_union(&ActionAction::RevealHand(Box::new(
-                        RevealHand {
-                            reveals,
-                            extra_data: None,
-                        },
-                    )))?);
-                    self.seq += 1;
-                }
-                ValidActionKind::VerifySeed => {
-                    // Seeds are not auto-revealed across a multi-hand game (a
-                    // revealed seed would expose that hand's deal). Excluded
-                    // from the action search above; unreachable here.
-                    break;
-                }
-                ValidActionKind::Bet { .. } => {
-                    // Don't auto-respond to bets
-                    break;
-                }
-            }
+            // Build the action and its payload once (shared with the chained
+            // produce-without-apply path), then apply it and emit the CBOR.
+            let (action, cbor) = self.build_action(seat, &va.kind)?;
+            self.state.apply(&action)?;
+            emitted.push(cbor);
+            self.seq += 1;
         }
         Ok(emitted)
     }
@@ -706,6 +822,20 @@ fn per_hand_seed(master_seed: &[u8], hand_index: u64) -> crate::Result<Vec<u8>> 
     data.extend_from_slice(master_seed);
     data.extend_from_slice(&hand_index.to_le_bytes());
     Ok(crypto::blake2b(&data)?.to_vec())
+}
+
+/// Map a valid-action kind to its lexicon camelCase name and optional deck
+/// position, matching `waiting_on_json` and the transcript record `$type`s.
+fn valid_kind_name(kind: &ValidActionKind) -> (&'static str, Option<usize>) {
+    match kind {
+        ValidActionKind::CommitSeed => ("commitSeed", None),
+        ValidActionKind::ShuffleDeck => ("shuffleDeck", None),
+        ValidActionKind::LockDeck => ("lockDeck", None),
+        ValidActionKind::RevealLockKey { deck_position } => ("revealLockKey", Some(*deck_position)),
+        ValidActionKind::Bet { .. } => ("bet", None),
+        ValidActionKind::RevealHand => ("revealHand", None),
+        ValidActionKind::VerifySeed => ("verifySeed", None),
+    }
 }
 
 fn bet_action_to_lex(action: &BetAction) -> BetAction2 {
