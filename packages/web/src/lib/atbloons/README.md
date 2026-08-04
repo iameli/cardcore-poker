@@ -10,22 +10,22 @@ The client sends only public game references to the wallet and reads only a publ
 
 ## Modules
 
-| File | Responsibility |
-| --- | --- |
-| `handoff.js` | Build and encode intents, build the wallet URL, parse and validate receipts. No dependency. |
-| `paid-hand.js` | `PaidHandController` — drive one seat through one hand across full-page redirects. |
-| `config.js` | Resolve the wallet URL and network tuple; discover the tuple from the managed-wallet node. |
-| `contract-lookup.js` | Find the contract strong reference for a table from the host repo, so a seat funds without a paste. |
-| `chained-driver.js` | `ChainedSession` — drive one seat through a paid hand as one globally ordered, settlement-valid action chain. |
-| `chained-game.js` | Live wiring: `ChainedGame`, content-addressed `actionStrongRef`, and the publisher-to-driver `publish` wrapper. |
-| `handoff.test.js` | Offline unit tests for the wire contract. |
-| `paid-hand.test.js` | Offline lifecycle tests for the controller. |
-| `config.test.js` | Offline tests for configuration and node discovery. |
-| `contract-lookup.test.js` | Offline tests for contract discovery. |
-| `chained-driver.test.js` | Offline tests for the paid-hand driver (order, links, buffering, seed tail). |
-| `chained-game.test.js` | Offline tests for the strong-ref and publish helpers. |
-| `chained-wasm.test.js` | Real-engine proof: seats build one content-addressed settlement-valid chain. |
-| `interop.test.js` | Cross-repository wire-compatibility proof against the atbloons Kotlin test. |
+| File                      | Responsibility                                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `handoff.js`              | Build and encode intents, build the wallet URL, parse and validate receipts. No dependency.                     |
+| `paid-hand.js`            | `PaidHandController` — drive one seat through one hand across full-page redirects.                              |
+| `config.js`               | Resolve the wallet URL and network tuple; discover the tuple from the managed-wallet node.                      |
+| `contract-lookup.js`      | Find the contract strong reference for a table from the host repo, so a seat funds without a paste.             |
+| `chained-driver.js`       | `ChainedSession` — drive one seat through a paid hand as one globally ordered, settlement-valid action chain.   |
+| `chained-game.js`         | Live wiring: `ChainedGame`, content-addressed `actionStrongRef`, and the publisher-to-driver `publish` wrapper. |
+| `handoff.test.js`         | Offline unit tests for the wire contract.                                                                       |
+| `paid-hand.test.js`       | Offline lifecycle tests for the controller.                                                                     |
+| `config.test.js`          | Offline tests for configuration and node discovery.                                                             |
+| `contract-lookup.test.js` | Offline tests for contract discovery.                                                                           |
+| `chained-driver.test.js`  | Offline tests for the paid-hand driver (order, links, buffering, seed tail).                                    |
+| `chained-game.test.js`    | Offline tests for the strong-ref and publish helpers.                                                           |
+| `chained-wasm.test.js`    | Real-engine proof: seats build one content-addressed settlement-valid chain.                                    |
+| `interop.test.js`         | Cross-repository wire-compatibility proof against the atbloons Kotlin test.                                     |
 
 The Svelte panel is `packages/web/src/components/AtbloonsHandoff.svelte`. `GameRoom.svelte` mounts it for a seated player when a wallet is configured, and it drives the hand through `ChainedGame` in paid mode.
 
