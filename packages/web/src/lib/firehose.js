@@ -86,7 +86,10 @@ export class FirehoseSubscriber {
    * @param {string[]} opts.peerDids - peer DIDs to listen for (excludes self)
    * @param {string} opts.tableUri - table AT URI (for filtering action records)
    * @param {string} opts.ownPdsUri - the local user's PDS, used as the dev fallback
-   * @param {(did: string, seq: number, actionCbor: Uint8Array) => void} opts.onAction
+   * @param {(did: string, seq: number, actionCbor: Uint8Array, record: object) => void} opts.onAction
+   *   `record` is the full data-model action record (with real byte fields), so
+   *   a paid (chained) session can content-address it for the chain's `prev`
+   *   link. Unpaid callers take three arguments and ignore it.
    */
   constructor({ peerDids, tableUri, ownPdsUri, onAction }) {
     this.peerDids = peerDids;
@@ -217,7 +220,7 @@ export class FirehoseSubscriber {
         for (const r of records) {
           if (r.value?.table?.uri !== this.tableUri) continue;
           const seq = r.value.seq;
-          this._dispatch(did, seq, () => this._actionFromJsonRecord(r.value));
+          this._dispatch(did, seq, () => this._fromJsonRecord(r.value));
         }
         cursor = records.length > 0 ? data.cursor : undefined;
       } while (cursor);
@@ -278,7 +281,7 @@ export class FirehoseSubscriber {
         for await (const record of extractActionRecords(new Uint8Array(frame.blocks))) {
           if (record.table?.uri !== this.tableUri) continue;
           const seq = record.seq;
-          this._dispatch(frame.repo, seq, () => this._cborFromRecord(record));
+          this._dispatch(frame.repo, seq, () => this._fromCarRecord(record));
         }
       } catch (e) {
         console.warn("[firehose] frame error:", e?.message || e);
@@ -303,29 +306,33 @@ export class FirehoseSubscriber {
     return settled;
   }
 
-  _dispatch(did, seq, makeCbor) {
+  _dispatch(did, seq, make) {
     if (this.stopped) return;
     const dedupKey = `${did}:${seq}`;
     if (this.seen.has(dedupKey)) return;
     this.seen.add(dedupKey);
     this._lastEventAt = Date.now();
     try {
-      const cbor = makeCbor();
-      this.onAction(did, seq, cbor);
+      const { cbor, record } = make();
+      this.onAction(did, seq, cbor, record);
     } catch (e) {
       console.warn(`[firehose] dispatch ${dedupKey} threw:`, e?.message || e);
     }
   }
 
-  /** From a record decoded out of the CAR (already DAG-CBOR-shaped). */
-  _cborFromRecord(record) {
-    return dagCbor.encode(record.action);
+  /**
+   * From a record decoded out of the CAR (already DAG-CBOR-shaped). Returns the
+   * inner-action CBOR the agent applies plus the full data-model record a paid
+   * chain content-addresses for its `prev` link.
+   */
+  _fromCarRecord(record) {
+    return { cbor: dagCbor.encode(record.action), record };
   }
 
   /** From a JSON record returned by listRecords (bytes are wire-format). */
-  _actionFromJsonRecord(value) {
-    const action = rehydrateBytes(value.action);
-    return dagCbor.encode(action);
+  _fromJsonRecord(value) {
+    const record = rehydrateBytes(value);
+    return { cbor: dagCbor.encode(record.action), record };
   }
 }
 

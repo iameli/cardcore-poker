@@ -190,6 +190,14 @@ export class PlayerSession {
     }
   }
 
+  get rawCommunityCards() {
+    try {
+      return JSON.parse(this.agent.community_cards());
+    } catch {
+      return [];
+    }
+  }
+
   get phase() {
     try {
       return this.agent.phase();

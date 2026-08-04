@@ -105,6 +105,44 @@ impl WasmAgent {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Enable or disable chained (settlement) driving. In chained mode the
+    /// agent never auto-emits; the caller drives one globally ordered action
+    /// chain via `next_action`, `produce_next`, and `produce_bet`, feeding every
+    /// action back through `receive_action`. Set this before `receive_table`.
+    pub fn set_chained(&mut self, on: bool) {
+        self.inner.set_chained(on);
+    }
+
+    /// Whether chained (settlement) driving is enabled.
+    pub fn is_chained(&self) -> bool {
+        self.inner.is_chained()
+    }
+
+    /// JSON of the next action in the canonical global order, or "null" when the
+    /// chain is complete (all seeds verified). Example:
+    /// `{"seat":1,"kind":"shuffleDeck","mine":true}`. `revealLockKey` entries
+    /// carry `deckPosition`; `bet` entries carry the available `options`.
+    pub fn next_action(&self) -> String {
+        self.inner.next_action_json()
+    }
+
+    /// Build (without applying) this seat's next non-interactive action for the
+    /// current canonical turn. Empty when it is not our turn or a bet is needed.
+    pub fn produce_next(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.inner
+            .produce_next()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Build (without applying) this seat's betting action. `action` is one of:
+    /// "fold", "check", "call", "allIn", or "raise:AMOUNT".
+    pub fn produce_bet(&mut self, action: &str) -> Result<Vec<u8>, JsValue> {
+        let bet = parse_bet_action(action).map_err(|e| JsValue::from_str(&e))?;
+        self.inner
+            .produce_bet(bet)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Get hole cards as JSON array of strings (e.g., ["As", "Kh"]).
     pub fn hole_cards(&self) -> String {
         let cards: Vec<String> = self

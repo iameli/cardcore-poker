@@ -13,6 +13,10 @@
   import { resolveHandles } from "../lib/atproto.js";
   import { getSetting, setSetting } from "../lib/settings.js";
   import { playTurnCue } from "../lib/audio.js";
+  import AtbloonsHandoff from "./AtbloonsHandoff.svelte";
+  import { lookupContractForTable } from "../lib/atbloons/contract-lookup.js";
+  import { ChainedGame } from "../lib/atbloons/chained-game.js";
+  import { isAtbloonsEnabled } from "../lib/atbloons/config.js";
 
   let { session, tableUri, onLeaveRoom } = $props();
 
@@ -46,6 +50,33 @@
   let gameOver = $state(false);
   let winnerDid = $state(null);
   let isSpectator = $state(false);
+  // atbloons paid-hand references: the finalized table strong ref and the most
+  // recent action strong ref (a settle candidate). Both stay null for unpaid
+  // games, where the atbloons panel renders nothing.
+  let atbloonsTableRef = $state(null);
+  let lastActionRef = $state(null);
+  // Paid (settlement-valid) mode. When the managed wallet is configured this
+  // seat plays the hand as ONE bounded, globally ordered action chain
+  // (`ChainedGame`) instead of the unpaid per-author `PlayerSession`, so the
+  // atbloons node can re-verify and settle it. Decided once at mount; unpaid
+  // play is byte-for-byte unchanged when no wallet is configured.
+  let paidMode = $state(false);
+  // The paid hand reached its Complete phase (the mandatory seed-reveal tail is
+  // published). The global chain tip is then the terminal action to settle.
+  let paidComplete = $state(false);
+  let chainTipRef = $state(null);
+  // A non-host seat discovers the contract from the host repo (seat 0) so it
+  // funds without pasting a strong reference. Returns null for unpaid games or
+  // when the host has not proposed yet; the panel then keeps manual entry.
+  async function atbloonsContractLookup() {
+    const hostDid = playerDids?.[0];
+    if (!hostDid || !atbloonsTableRef || !session?.client) return null;
+    return lookupContractForTable({
+      client: session.client,
+      hostDid,
+      tableRef: atbloonsTableRef,
+    });
+  }
   // We're in the roster, but this device doesn't hold the game's key
   // material (the seed lives in localStorage on whatever device played it).
   // Without the seed we can't reproduce our published actions — so we watch
@@ -103,6 +134,10 @@
 
   let _publisher = null;
   let _session = null;
+  // The paid-hand engine (null for unpaid play). Exactly one of `_session` /
+  // `_chained` is ever non-null; `eng()` returns whichever is active so the
+  // shared UI reads the same state surface from both.
+  let _chained = null;
   let _firehose = null;
   let _tableTid = null;
   let _tableCid = null;
@@ -172,6 +207,8 @@
       const { record, cid } = await fetchTableRecord(tableUri, session.pdsUri);
       tableRecord = record;
       _tableCid = cid;
+      // The finalized table strong ref drives an atbloons PROPOSE/FUND intent.
+      atbloonsTableRef = { uri: tableUri, cid };
       _tableTid = tidFromUri(tableUri);
       playerDids = record.players;
       ourPlayerIndex = playerDids.indexOf(session.did);
@@ -196,6 +233,12 @@
         .catch(() => {});
 
       _publisher = new Publisher({ client: session.client, did: session.did });
+
+      // Paid mode is a table-wide property: it changes how EVERY action is
+      // numbered and linked, so it must be decided before the agent starts.
+      // The managed wallet being configured is the signal that this deployment
+      // plays settlement-valid (chained) hands.
+      paidMode = isAtbloonsEnabled();
 
       // getRecord strips $type; add it back for the lexicon.
       const tableForCbor = { $type: LEXICONS.TABLE, ...record };
@@ -227,7 +270,10 @@
           console.warn("loadPublishedActions failed:", e?.message || e);
         }
         if (publishedCount > 0) {
-          const seq0 = _publisher.publishedRecord(_tableTid, 0);
+          // Our own commitSeed sits at global seq = our seat index in a paid
+          // (chained) hand, but at our own seq 0 in an unpaid per-author hand.
+          const commitSeq = paidMode ? ourPlayerIndex : 0;
+          const seq0 = _publisher.publishedRecord(_tableTid, commitSeq);
           if (stored && seq0 && seedReproducesCommit(stored, tableCbor, seq0.value)) {
             seed = stored;
             addLog(`Resuming — ${publishedCount} of our actions already published`);
@@ -245,33 +291,60 @@
         }
       }
 
-      _session = new PlayerSession({
-        // A keyless viewer's DID is in the roster, but its agent must NOT
-        // take the seat — a seated agent auto-emits crypto derived from the
-        // (throwaway) seed and its self-records would shadow the real ones.
-        // A non-roster DID makes the agent a pure replay observer.
-        did: isSpectator ? "did:cardcore:viewer" : session.did,
-        seed,
-        publishAction: isSpectator
-          ? async () => {}
-          : async ({ seq, cbor }) => {
-              addLog(`You: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
-              await _publisher.publishAction({
-                tableRef: { uri: tableUri, cid: _tableCid },
-                seq,
-                tableTid: _tableTid,
-                actionCbor: cbor,
-              });
-            },
-        onUpdate: refreshUi,
-      });
+      // A keyless viewer's DID is in the roster, but its agent must NOT take
+      // the seat — a seated agent auto-emits (unpaid) or auto-produces (paid)
+      // crypto derived from the (throwaway) seed and its self-records would
+      // shadow the real ones. A non-roster DID makes the agent a pure replay
+      // observer in both modes.
+      const engineDid = isSpectator ? "did:cardcore:viewer" : session.did;
+      if (paidMode) {
+        // Paid: one bounded, globally ordered action chain the atbloons node
+        // can re-verify and settle. The driver auto-produces every
+        // deterministic step (commit, shuffle, lock, reveals, and the mandatory
+        // final seed-reveal) and pauses only for a human bet; a viewer never
+        // produces and just replays the chain in global order.
+        _chained = new ChainedGame({
+          agent: createAgent(engineDid, seed),
+          did: engineDid,
+          tableRef: { uri: tableUri, cid: _tableCid },
+          tableTid: _tableTid,
+          publisher: _publisher,
+          onUpdate: refreshUi,
+          onPublish: (ref, _seq, cbor) => {
+            addLog(`You: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
+            if (ref?.uri && ref?.cid) lastActionRef = ref;
+          },
+        });
+        addLog(isSpectator ? "Watching paid table…" : "Joining paid table…");
+        await _chained.receiveTable(tableCbor);
+      } else {
+        _session = new PlayerSession({
+          did: engineDid,
+          seed,
+          publishAction: isSpectator
+            ? async () => {}
+            : async ({ seq, cbor }) => {
+                addLog(`You: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
+                const published = await _publisher.publishAction({
+                  tableRef: { uri: tableUri, cid: _tableCid },
+                  seq,
+                  tableTid: _tableTid,
+                  actionCbor: cbor,
+                });
+                // Remember the latest action ref as a settle candidate for the
+                // atbloons paid-hand panel. Unused for unpaid games.
+                if (published?.uri && published?.cid) lastActionRef = published;
+              },
+          onUpdate: refreshUi,
+        });
 
-      // Feed the table to our local agent first — that moves it out of Init
-      // and into the CommitSeeds phase, so the firehose backfill (which may
-      // include peer CommitSeeds already on disk) won't be rejected as
-      // out-of-phase.
-      addLog(isSpectator ? "Watching table…" : "Joining table…");
-      await _session.receiveTable(tableCbor);
+        // Feed the table to our local agent first — that moves it out of Init
+        // and into the CommitSeeds phase, so the firehose backfill (which may
+        // include peer CommitSeeds already on disk) won't be rejected as
+        // out-of-phase.
+        addLog(isSpectator ? "Watching table…" : "Joining table…");
+        await _session.receiveTable(tableCbor);
+      }
 
       // Subscribe to EVERY player's repo — including our own. Replaying our
       // own records is what makes a page reload resumable: re-derivable
@@ -281,7 +354,7 @@
         peerDids: playerDids,
         tableUri,
         ownPdsUri: session.pdsUri,
-        onAction: async (did, seq, cbor) => {
+        onAction: async (did, seq, cbor, record) => {
           // A keyless viewer's own past records are REPLAY input, not echo:
           // the viewer agent never emitted them, so they must apply like any
           // peer's. fromSelf semantics only exist for a seated session.
@@ -291,7 +364,15 @@
             addLog(`${nameFor(did)}: ${actionLabel(cbor)}`, { protocol: isProtocolAction(cbor) });
           }
           try {
-            await _session.receiveAction(cbor, { did, fromSelf, seq });
+            if (paidMode) {
+              // Route the DECODED action record into the global chain: the
+              // driver applies it in strict global order and content-addresses
+              // it for the next `prev` link. Own echoes of already-passed slots
+              // are dropped; our unplayed slots on resume re-apply in order.
+              await _chained.deliverFirehoseAction(did, seq, cbor, record);
+            } else {
+              await _session.receiveAction(cbor, { did, fromSelf, seq });
+            }
           } catch (e) {
             console.warn(`receiveAction(${did}@${seq}) failed:`, e?.message || e);
           }
@@ -310,7 +391,16 @@
     if (_bannerTimer) clearInterval(_bannerTimer);
     _firehose?.stop();
     _session?.destroy();
+    _chained?.destroy();
   });
+
+  // The active game engine: the paid chain when in paid mode, else the unpaid
+  // per-author session. Both expose the same read-only state surface
+  // (gameState, rawHoleCards, phase, waitingOn, needsBet, betOptions,
+  // isComplete, lastHandResult, gameOver, pendingCount) so the UI reads one.
+  function eng() {
+    return _chained || _session;
+  }
 
   // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -361,8 +451,9 @@
   }
 
   function refreshUi() {
-    if (!_session) return;
-    const gs = _session.gameState;
+    const engine = eng();
+    if (!engine) return;
+    const gs = engine.gameState;
     if (gs) {
       pot = gs.pot ?? pot;
       const chips = {};
@@ -387,10 +478,10 @@
       if (preAction?.type === "call" && ourToCall !== preAction.amount) preAction = null;
       if (ourFolded) preAction = null;
     }
-    holeCards = _session.holeCards;
-    communityCards = _session.communityCards;
-    phase = _session.phase;
-    waitingOn = _session.waitingOn;
+    holeCards = (engine.rawHoleCards || []).map(parseCard).filter(Boolean);
+    communityCards = (engine.rawCommunityCards || []).map(parseCard).filter(Boolean);
+    phase = engine.phase;
+    waitingOn = engine.waitingOn;
 
     const commLen = communityCards.length;
     let uiPhase = "preflop";
@@ -399,23 +490,23 @@
     else if (commLen >= 4) uiPhase = "turn";
     else if (commLen >= 3) uiPhase = "flop";
 
-    if (_session.isComplete) {
+    if (engine.isComplete) {
       handleHandComplete();
     }
 
     // Audio cue on the rising edge of "it's your turn" — never on repeats.
-    if (_session.needsBet && !_wasOurTurn && soundOnTurn && !isSpectator) {
+    if (engine.needsBet && !_wasOurTurn && soundOnTurn && !isSpectator) {
       playTurnCue();
     }
-    _wasOurTurn = _session.needsBet;
+    _wasOurTurn = engine.needsBet;
 
     // Armed pre-action: consume it now that action reached us. setTimeout
     // breaks out of the onUpdate call stack — bet() must not re-enter the
     // agent while it's mid-processing.
-    if (_session.needsBet && preAction && !isSpectator) {
+    if (engine.needsBet && preAction && !isSpectator) {
       const pre = preAction;
       preAction = null;
-      const opts = mapBetOptions(_session.betOptions);
+      const opts = mapBetOptions(engine.betOptions);
       const canCall = opts.some((a) => a.type === "call");
       const canCheck = opts.some((a) => a.type === "check");
       let fire = null;
@@ -424,9 +515,9 @@
       if (fire) setTimeout(() => handleAction({ type: fire }), 0);
     }
 
-    if (_session.needsBet) {
+    if (engine.needsBet) {
       isOurTurn = true;
-      availableActions = mapBetOptions(_session.betOptions);
+      availableActions = mapBetOptions(engine.betOptions);
       const ourChips = chipsByDid[session.did] ?? 0;
       // The minimum raise TOTAL comes from the engine's suggested Raise
       // option (current bet + big blind). A fixed big-blind minimum here is
@@ -450,16 +541,17 @@
   // Hand finished: log the result once, then either declare the game over or
   // schedule the next hand to start automatically.
   function handleHandComplete() {
+    const engine = eng();
     // Replayed hands are history, not suspense: no banner, no readable pause.
     // (A live boundary has at most one pending CommitSeed per peer; a backlog
     // bigger than the roster means we're replaying.)
     const catchingUp = isSpectator
-      ? _session.pendingCount > 0
-      : _session.pendingCount > playerDids.length;
+      ? engine.pendingCount > 0
+      : engine.pendingCount > playerDids.length;
 
     preAction = null; // pre-actions never carry across a hand boundary
 
-    const result = _session.lastHandResult;
+    const result = engine.lastHandResult;
     if (result && result.hand_index > _loggedHandIndex) {
       _loggedHandIndex = result.hand_index;
       logHandResult(result);
@@ -471,10 +563,23 @@
         if (did) revealed[did] = s.cards.map(parseCard).filter(Boolean);
       }
       revealedByDid = revealed;
-      if (!catchingUp && !_session.gameOver) showHandBanner(result);
+      if (!catchingUp && !engine.gameOver) showHandBanner(result);
     }
 
-    if (_session.gameOver) {
+    // A paid hand is ONE settlement-valid chain: never auto-advance. When the
+    // chain reaches Complete (its mandatory final seed-reveal is published),
+    // the global chain tip is the terminal action the settle intent uses — the
+    // panel then offers one-click settlement with no hand-typed reference.
+    if (paidMode) {
+      if (!paidComplete) {
+        paidComplete = true;
+        chainTipRef = _chained.tipRef;
+        addLog("Paid hand complete — settle to move the chip stacks back to atbloons.");
+      }
+      return;
+    }
+
+    if (engine.gameOver) {
       if (!gameOver) {
         gameOver = true;
         winnerDid = playerDids.find((d) => (chipsByDid[d] ?? 0) > 0) ?? null;
@@ -606,7 +711,10 @@
     // hand is coming — don't report it as waiting on anyone.
     const entries = waitingOn.filter((e) => e.kind !== "verifySeed");
     if (!entries.length) {
-      if (!gameOver && phase === "Complete") return "hand complete — next hand soon…";
+      if (!gameOver && phase === "Complete") {
+        // A paid hand is a single hand — there is no next hand to deal.
+        return paidMode ? "hand complete — settle to finish" : "hand complete — next hand soon…";
+      }
       return "";
     }
     return entries
@@ -623,14 +731,16 @@
   // ─── User actions ─────────────────────────────────────────────────
 
   async function handleAction(action) {
-    if (!_session) return;
+    const engine = eng();
+    if (!engine) return;
     let bet;
     if (action.type === "raise") bet = `raise:${action.amount || 2}`;
     else bet = action.type;
     // No addLog here — the bet is logged like every other action when its
     // record is published.
     try {
-      await _session.bet(bet);
+      if (paidMode) await _chained.submitBet(bet);
+      else await _session.bet(bet);
     } catch (e) {
       error = "Bet failed: " + (e?.message || e);
     }
@@ -740,6 +850,21 @@
     <div class="gameover-banner" data-testid="game-over">
       🏆 Game over — {winnerDid ? `${nameFor(winnerDid)} wins it all!` : "winner takes all"}
     </div>
+  {/if}
+
+  {#if !isSpectator && ourPlayerIndex >= 0 && atbloonsTableRef}
+    <AtbloonsHandoff
+      tableRef={atbloonsTableRef}
+      seat={ourPlayerIndex}
+      terminalActionRef={paidMode
+        ? paidComplete
+          ? chainTipRef
+          : null
+        : gameOver
+          ? lastActionRef
+          : null}
+      contractLookup={atbloonsContractLookup}
+    />
   {/if}
 
   {#if handBanner}
